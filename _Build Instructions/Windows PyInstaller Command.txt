@@ -1,0 +1,1 @@
+py -m PyInstaller --onefile --name PatchIO --icon=icon.ico --add-data "pistachio.png;." --add-data "about.txt;." --noconsole patchio.py

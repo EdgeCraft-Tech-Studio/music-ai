@@ -1,0 +1,6 @@
+{
+  "model": "gpt-4o",
+  "max_tokens": 400,
+  "temperature": 0.2,
+  "top_p": 1.0
+}

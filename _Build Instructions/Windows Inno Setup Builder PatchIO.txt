@@ -1,0 +1,27 @@
+; PatchIO.iss - Simple Installer Script for Windows
+
+[Setup]
+AppName=PatchIO
+AppVersion=1.0.6
+DefaultDirName={autopf}\PatchIO
+DefaultGroupName=PatchIO
+OutputBaseFilename=PatchIO_Installer
+Compression=lzma
+SolidCompression=yes
+DisableDirPage=yes
+DisableProgramGroupPage=yes
+UninstallDisplayIcon={app}\PatchIO.exe
+SetupIconFile=icon.ico   ; ← This sets the installer icon
+
+[Files]
+Source: "PatchIO.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "PatchIO_README.pdf"; DestDir: "{commonappdata}\PatchIO"; Flags: ignoreversion
+Source: "icon.ico"; DestDir: "{app}"; Flags: ignoreversion
+
+[Icons]
+Name: "{group}\PatchIO"; Filename: "{app}\PatchIO.exe"
+Name: "{group}\Documentation"; Filename: "{commonappdata}\PatchIO\PatchIO_README.pdf"
+Name: "{group}\PatchIO"; Filename: "{app}\PatchIO.exe"; IconFilename: "{app}\icon.ico"
+
+[Run]
+Filename: "{app}\PatchIO.exe"; Description: "Launch PatchIO"; Flags: nowait postinstall skipifsilent

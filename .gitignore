@@ -1,0 +1,69 @@
+# Build Artifacts
+_Current version/current/builds/
+_Current version/current/dist/
+_Current version/current/build/
+# But include build configuration files
+!_Current version/current/builds/build_config/
+!_Current version/current/builds/build_config/**
+*.app
+*.dmg
+*.zip
+*.exe
+*.msi
+
+# PyInstaller
+dist/
+build/
+
+# Python
+__pycache__/
+
+# IDE
+.idea/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# # Windows
+# Thumbs.db
+# ehthumbs.db
+# Desktop.ini
+# $RECYCLE.BIN/
+# *.cab
+# *.msi
+# *.msm
+# *.msp
+# *.lnk
+
+# Temporary Files
+*.tmp
+*.temp
+*.log
+*.pid
+*.seed
+*.pid.lock
+
+# Application Specific
+*.zip
+PatchIO_*.zip
+PatchIO_*.dmg
+PatchIO_*.app
+# Ignore external_updater binary (built from source)
+_Current version/current/updater/external_updater
+
+# # API Keys and Secrets
+# api_key.txt
+# *.key
+# *.pem
+# *.p12

@@ -1,0 +1,19 @@
+pkgbuild \
+  --root build/app \
+  --identifier com.shaked.patchio.app \
+  --version 1.0 \
+  --install-location /Applications/PatchIO \
+  PatchIO-app.pkg
+
+pkgbuild \
+  --root build/support \
+  --identifier com.shaked.patchio.docs \
+  --version 1.0 \
+  --install-location /Library/Application\ Support/PatchIO \
+  PatchIO-docs.pkg
+
+productbuild \
+  --package PatchIO-app.pkg \
+  --package PatchIO-docs.pkg \
+  --version 1.0 \
+  PatchIO.pkg

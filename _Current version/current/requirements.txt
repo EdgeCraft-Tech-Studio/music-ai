@@ -1,0 +1,38 @@
+# PatchIO Complete Dependencies
+# This file contains all dependencies for the modern PySide6-based UI and future features
+
+# Core UI Framework
+PySide6>=6.5.0
+
+# Utility Libraries
+appdirs>=1.4.4
+pyautogui>=0.9.54
+pyperclip>=1.8.2
+watchdog>=3.0.0
+
+# Platform-Specific File System Monitoring (Optional)
+# Note: These are optional optimizations. The system will fall back to watchdog if not available.
+# fsevents>=0.2.1; sys_platform == "darwin"  # macOS FSEvents (if available)
+# pywin32>=306; sys_platform == "win32"       # Windows APIs (if available)
+
+# Cryptography (for encrypt.py utility)
+pycryptodome>=3.15.0
+
+# Build Tools (for PyInstaller)
+PyInstaller>=5.13.0
+
+# AI and API Integration
+openai>=1.0.0
+requests>=2.28.0
+
+# Image Processing
+Pillow>=9.0.0
+
+# Legacy Support (for old patchio.py features)
+tkinterdnd2>=0.3.0
+google-api-python-client>=2.0.0
+#pyobjc-core>=9.0
+#pyobjc>=9.0
+python-rtmidi>=1.4.0
+pygetwindow>=0.0.9
+pywinauto>=0.6.8 

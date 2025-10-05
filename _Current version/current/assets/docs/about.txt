@@ -1,0 +1,7 @@
+PatchIO – Patches and Instruments Finder
+Version 1.1.7
+© 2025 Shaked Shachar
+
+Created by Shaked Shachar
+Email: info@shaked-music.com
+Website: https://www.shaked-music.com

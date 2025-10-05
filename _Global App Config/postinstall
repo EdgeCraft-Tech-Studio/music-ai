@@ -1,0 +1,23 @@
+#!/bin/bash
+
+# Detect macOS version
+OS_MAJOR=$(sw_vers -productVersion | cut -d '.' -f 1)
+OS_MINOR=$(sw_vers -productVersion | cut -d '.' -f 2)
+
+# Open the Accessibility settings pane depending on macOS version
+if [[ "$OS_MAJOR" -eq 10 && "$OS_MINOR" -le 15 ]] || [[ "$OS_MAJOR" -eq 11 ]] || [[ "$OS_MAJOR" -eq 12 ]]; then
+    # macOS Mojave (10.14) to Monterey (12)
+    open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+else
+    # macOS Ventura (13) and later (System Settings)
+    open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+    # Older fallback if needed:
+    # osascript -e 'tell application "System Settings" to reveal anchor "Privacy_Accessibility" of pane id "com.apple.preference.security"'
+fi
+
+# Display prompt to guide the user
+osascript <<EOD
+display dialog "To enable PatchIO's 'Open Track in DAW' feature, you must grant Accessibility access.\n\nThis is required for PatchIO to control Cubase and load Kontakt patches automatically.\n\n1. Click the lock icon.\n2. Check the box next to 'PatchIO'.\n\nThis step is only required once." buttons {"OK"} default button "OK" with icon caution with title "Enable Accessibility Access"
+EOD
+
+exit 0
