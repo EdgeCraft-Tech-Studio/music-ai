@@ -8,7 +8,18 @@ import sys
 import os
 import sqlite3
 from typing import Dict, Optional, List
-from PySide6.QtWidgets import QApplication, QPushButton, QFrame, QCheckBox, QWidget, QVBoxLayout, QHBoxLayout, QSizePolicy, QSpacerItem, QLabel
+from PySide6.QtWidgets import (
+    QApplication,
+    QPushButton,
+    QFrame,
+    QCheckBox,
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QSizePolicy,
+    QSpacerItem,
+    QLabel,
+)
 from PySide6.QtCore import QTimer, QObject, Qt, QThread, Signal
 from PySide6.QtGui import QPainter, QColor, QPen, QFont
 
@@ -29,11 +40,14 @@ except ImportError:
     class FileEvent:
         pass
 
+
 # Constants for UI text labels
 SEARCH_RESULTS_LABEL = "Search results for:"
 
+
 class BackgroundVendorExtractionWorker(QThread):
     """Background worker for vendor/library extraction after fast scan"""
+
     extraction_completed = Signal(dict)
     extraction_progress = Signal(str)
     
@@ -56,24 +70,32 @@ class BackgroundVendorExtractionWorker(QThread):
             cursor = conn.cursor()
             
             # Get one file per unique library folder that needs vendor/library extraction
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT DISTINCT 
                     SUBSTR(path, 1, LENGTH(path) - LENGTH(name) - 1) as library_folder,
                     MIN(path) as sample_file
                 FROM files 
                 WHERE vendor = 'Unknown Vendor' OR library = 'Unknown Library'
                 GROUP BY library_folder
-            """)
+            """
+            )
             
             library_folders = cursor.fetchall()
             conn.close()
             
             if not library_folders:
-                self.extraction_progress.emit("✅ All files already have vendor/library information")
-                self.extraction_completed.emit({'files_processed': 0, 'files_updated': 0})
+                self.extraction_progress.emit(
+                    "✅ All files already have vendor/library information"
+                )
+                self.extraction_completed.emit(
+                    {"files_processed": 0, "files_updated": 0}
+                )
                 return
             
-            self.extraction_progress.emit(f"🔍 Found {len(library_folders)} unique library folders to process...")
+            self.extraction_progress.emit(
+                f"🔍 Found {len(library_folders)} unique library folders to process..."
+            )
             
             # Process each library folder
             folders_processed = 0
@@ -86,18 +108,29 @@ class BackgroundVendorExtractionWorker(QThread):
                 # Extract vendor/library for this library folder
                 vendor, library = self._extract_vendor_library_for_folder(sample_file)
                 
-                if vendor != 'Unknown Vendor' or library != 'Unknown Library':
+                if vendor != "Unknown Vendor" or library != "Unknown Library":
                     # Update ALL files in this library folder with the same vendor/library
-                    files_updated = self._update_folder_files(library_folder, vendor, library)
+                    files_updated = self._update_folder_files(
+                        library_folder, vendor, library
+                    )
                     total_files_updated += files_updated
                 
                 folders_processed += 1
                 
                 if folders_processed % 50 == 0:  # Progress every 50 folders
-                    self.extraction_progress.emit(f"🔍 Processed {folders_processed}/{len(library_folders)} library folders...")
+                    self.extraction_progress.emit(
+                        f"🔍 Processed {folders_processed}/{len(library_folders)} library folders..."
+                    )
             
-            self.extraction_progress.emit(f"✅ Vendor extraction completed: {total_files_updated} files updated across {folders_processed} library folders")
-            self.extraction_completed.emit({'files_processed': folders_processed, 'files_updated': total_files_updated})
+            self.extraction_progress.emit(
+                f"✅ Vendor extraction completed: {total_files_updated} files updated across {folders_processed} library folders"
+            )
+            self.extraction_completed.emit(
+                {
+                    "files_processed": folders_processed,
+                    "files_updated": total_files_updated,
+                }
+            )
             
         except Exception as e:
             self.extraction_progress.emit(f"❌ Vendor extraction failed: {e}")
@@ -112,28 +145,28 @@ class BackgroundVendorExtractionWorker(QThread):
             
             # Get knowledge database
             config_dir = appdirs.user_config_dir(APP_NAME, APP_AUTHOR)
-            knowledge_db_path = os.path.join(config_dir, 'patchio_knowledge.db')
+            knowledge_db_path = os.path.join(config_dir, "patchio_knowledge.db")
             
             if os.path.exists(knowledge_db_path):
                 knowledge_db = KnowledgeDatabase(knowledge_db_path)
                 vendor, library = knowledge_db.extract_vendor_library(sample_file_path)
                 
                 # If Knowledge Database found anything, use it (even if only vendor or only library)
-                if vendor != 'Unknown Vendor' or library != 'Unknown Library':
+                if vendor != "Unknown Vendor" or library != "Unknown Library":
                     return vendor, library
             
             # If Knowledge Database didn't work, try the fast rule-based method
             vendor, library = self._fast_extract_vendor_library(sample_file_path)
             
             # If fast method found anything, use it (even if only vendor or only library)
-            if vendor != 'Unknown Vendor' or library != 'Unknown Library':
+            if vendor != "Unknown Vendor" or library != "Unknown Library":
                 return vendor, library
             
-            return 'Unknown Vendor', 'Unknown Library'
+            return "Unknown Vendor", "Unknown Library"
             
         except Exception as e:
             print(f"❌ Error extracting vendor/library for folder: {e}")
-            return 'Unknown Vendor', 'Unknown Library'
+            return "Unknown Vendor", "Unknown Library"
     
     def _update_folder_files(self, library_folder: str, vendor: str, library: str):
         """Update all files in a library folder with the same vendor/library"""
@@ -142,7 +175,8 @@ class BackgroundVendorExtractionWorker(QThread):
             cursor = conn.cursor()
             
             # Update only files that need vendor/library information
-            cursor.execute("""
+            cursor.execute(
+                """
                 UPDATE files 
                 SET vendor = CASE 
                     WHEN vendor = 'Unknown Vendor' THEN ? 
@@ -154,7 +188,9 @@ class BackgroundVendorExtractionWorker(QThread):
                 END,
                 updated_at = strftime('%s', 'now')
                 WHERE path LIKE ? AND (vendor = 'Unknown Vendor' OR library = 'Unknown Library')
-            """, (vendor, library, f"{library_folder}%"))
+            """,
+                (vendor, library, f"{library_folder}%"),
+            )
             
             files_updated = cursor.rowcount
             conn.commit()
@@ -175,83 +211,83 @@ class BackgroundVendorExtractionWorker(QThread):
         
         # Pre-compiled vendor patterns for speed
         vendor_patterns = {
-            'native instruments': 'Native Instruments',
-            'spitfire': 'Spitfire Audio',
-            'heavyocity': 'Heavyocity',
-            'eastwest': 'EastWest',
-            'cinesamples': 'Cinesamples',
-            'synthogy': 'Synthogy',
-            'apple': 'Apple',
-            'steinberg': 'Steinberg',
-            'image-line': 'Image-Line',
-            'avid': 'Avid',
-            'cockos': 'Cockos',
-            'bitwig': 'Bitwig',
-            'reason studios': 'Reason Studios',
-            'output': 'Output',
-            '8dio': '8DIO',
-            'orchestral tools': 'Orchestral Tools',
-            'audio imperia': 'Audio Imperia',
-            'keep forest': 'Keep Forest',
-            'heavyocity': 'Heavyocity',
-            'sonokinetic': 'Sonokinetic',
-            'project sam': 'Project SAM',
-            'cinesamples': 'Cinesamples',
-            'spitfire audio': 'Spitfire Audio',
-            'native instruments': 'Native Instruments',
-            'kontakt': 'Native Instruments',
-            'omnisphere': 'Spectrasonics',
-            'spectrasonics': 'Spectrasonics',
-            'arturia': 'Arturia',
-            'u-he': 'u-he',
-            'fabfilter': 'FabFilter',
-            'izotope': 'iZotope',
-            'waves': 'Waves',
-            'plugin alliance': 'Plugin Alliance',
-            'softube': 'Softube',
-            'valhalla': 'Valhalla DSP',
-            'soundtoys': 'Soundtoys',
-            'output': 'Output',
-            'splice': 'Splice',
-            'loopmasters': 'Loopmasters',
-            'black octopus': 'Black Octopus',
-            'ghost syndicate': 'Ghost Syndicate',
-            'vengeance': 'Vengeance',
-            'prime loops': 'Prime Loops',
-            'sample magic': 'Sample Magic',
-            'big fish audio': 'Big Fish Audio',
-            'zero-g': 'Zero-G',
-            'best service': 'Best Service',
-            'engine': 'Best Service',
-            'east west': 'EastWest',
-            'composer cloud': 'EastWest',
-            'hollywood': 'EastWest',
-            'play': 'EastWest',
-            'opus': 'EastWest',
-            'symphonic orchestra': 'EastWest',
-            'hollywood strings': 'EastWest',
-            'hollywood brass': 'EastWest',
-            'hollywood woodwinds': 'EastWest',
-            'hollywood percussion': 'EastWest',
-            'hollywood choir': 'EastWest',
-            'hollywood solo strings': 'EastWest',
-            'hollywood backup singers': 'EastWest',
-            'hollywood solo woodwinds': 'EastWest',
-            'hollywood solo brass': 'EastWest',
-            'hollywood solo percussion': 'EastWest',
-            'hollywood solo choir': 'EastWest',
-            'hollywood solo backup singers': 'EastWest',
-            'hollywood solo solo strings': 'EastWest',
-            'hollywood solo solo woodwinds': 'EastWest',
-            'hollywood solo solo brass': 'EastWest',
-            'hollywood solo solo percussion': 'EastWest',
-            'hollywood solo solo choir': 'EastWest',
-            'hollywood solo solo backup singers': 'EastWest'
+            "native instruments": "Native Instruments",
+            "spitfire": "Spitfire Audio",
+            "heavyocity": "Heavyocity",
+            "eastwest": "EastWest",
+            "cinesamples": "Cinesamples",
+            "synthogy": "Synthogy",
+            "apple": "Apple",
+            "steinberg": "Steinberg",
+            "image-line": "Image-Line",
+            "avid": "Avid",
+            "cockos": "Cockos",
+            "bitwig": "Bitwig",
+            "reason studios": "Reason Studios",
+            "output": "Output",
+            "8dio": "8DIO",
+            "orchestral tools": "Orchestral Tools",
+            "audio imperia": "Audio Imperia",
+            "keep forest": "Keep Forest",
+            "heavyocity": "Heavyocity",
+            "sonokinetic": "Sonokinetic",
+            "project sam": "Project SAM",
+            "cinesamples": "Cinesamples",
+            "spitfire audio": "Spitfire Audio",
+            "native instruments": "Native Instruments",
+            "kontakt": "Native Instruments",
+            "omnisphere": "Spectrasonics",
+            "spectrasonics": "Spectrasonics",
+            "arturia": "Arturia",
+            "u-he": "u-he",
+            "fabfilter": "FabFilter",
+            "izotope": "iZotope",
+            "waves": "Waves",
+            "plugin alliance": "Plugin Alliance",
+            "softube": "Softube",
+            "valhalla": "Valhalla DSP",
+            "soundtoys": "Soundtoys",
+            "output": "Output",
+            "splice": "Splice",
+            "loopmasters": "Loopmasters",
+            "black octopus": "Black Octopus",
+            "ghost syndicate": "Ghost Syndicate",
+            "vengeance": "Vengeance",
+            "prime loops": "Prime Loops",
+            "sample magic": "Sample Magic",
+            "big fish audio": "Big Fish Audio",
+            "zero-g": "Zero-G",
+            "best service": "Best Service",
+            "engine": "Best Service",
+            "east west": "EastWest",
+            "composer cloud": "EastWest",
+            "hollywood": "EastWest",
+            "play": "EastWest",
+            "opus": "EastWest",
+            "symphonic orchestra": "EastWest",
+            "hollywood strings": "EastWest",
+            "hollywood brass": "EastWest",
+            "hollywood woodwinds": "EastWest",
+            "hollywood percussion": "EastWest",
+            "hollywood choir": "EastWest",
+            "hollywood solo strings": "EastWest",
+            "hollywood backup singers": "EastWest",
+            "hollywood solo woodwinds": "EastWest",
+            "hollywood solo brass": "EastWest",
+            "hollywood solo percussion": "EastWest",
+            "hollywood solo choir": "EastWest",
+            "hollywood solo backup singers": "EastWest",
+            "hollywood solo solo strings": "EastWest",
+            "hollywood solo solo woodwinds": "EastWest",
+            "hollywood solo solo brass": "EastWest",
+            "hollywood solo solo percussion": "EastWest",
+            "hollywood solo solo choir": "EastWest",
+            "hollywood solo solo backup singers": "EastWest",
         }
         
         # Find vendor in path
-        vendor = 'Unknown Vendor'
-        library = 'Unknown Library'
+        vendor = "Unknown Vendor"
+        library = "Unknown Library"
         
         for pattern, vendor_name in vendor_patterns.items():
             if pattern in path_lower:
@@ -263,8 +299,21 @@ class BackgroundVendorExtractionWorker(QThread):
                         # Look for library in next few folders
                         for j in range(i + 1, min(i + 4, len(parts))):
                             next_part = parts[j]
-                            if (len(next_part) > 2 and len(next_part) <= 30 and 
-                                next_part.lower() not in {'samples', 'patches', 'instruments', 'presets', 'content', 'data', 'library', 'libraries'}):
+                            if (
+                                len(next_part) > 2
+                                and len(next_part) <= 30
+                                and next_part.lower()
+                                not in {
+                                    "samples",
+                                    "patches",
+                                    "instruments",
+                                    "presets",
+                                    "content",
+                                    "data",
+                                    "library",
+                                    "libraries",
+                                }
+                            ):
                                 library = next_part
                                 break
                         break
@@ -272,8 +321,10 @@ class BackgroundVendorExtractionWorker(QThread):
         
         return vendor, library
 
+
 class BackgroundSyncWorker(QThread):
     """🚀 PROFESSIONAL background worker for database synchronization with progress tracking"""
+
     sync_completed = Signal(dict)
     sync_failed = Signal(str)
     sync_progress = Signal(str)  # Progress updates
@@ -296,6 +347,7 @@ class BackgroundSyncWorker(QThread):
         """🚀 Run the sync in background thread with professional progress tracking"""
         try:
             from utils.database.file_index_manager import FileIndexManager
+
             self.sync_progress.emit("🔄 Starting PROFESSIONAL file index sync...")
             
             # Create file index manager
@@ -310,15 +362,17 @@ class BackgroundSyncWorker(QThread):
                 self.scan_progress.emit(progress_info)
                 
                 # Also emit simple progress message
-                if progress_info.get('phase') == 'streaming_scan':
-                    scanned = progress_info.get('scanned', 0)
-                    relevant = progress_info.get('relevant', 0)
-                    rate = progress_info.get('rate', 0)
-                    eta_minutes = progress_info.get('eta_minutes', 0)
+                if progress_info.get("phase") == "streaming_scan":
+                    scanned = progress_info.get("scanned", 0)
+                    relevant = progress_info.get("relevant", 0)
+                    rate = progress_info.get("rate", 0)
+                    eta_minutes = progress_info.get("eta_minutes", 0)
                     
                     message = f"🔍 Scanned {scanned:,} files, found {relevant:,} relevant files..."
                     if rate > 0:
-                        message += f" Rate: {rate:.0f} files/sec, ETA: {eta_minutes:.1f} min"
+                        message += (
+                            f" Rate: {rate:.0f} files/sec, ETA: {eta_minutes:.1f} min"
+                        )
                     
                     self.sync_progress.emit(message)
             
@@ -328,8 +382,7 @@ class BackgroundSyncWorker(QThread):
             # Perform startup sync with progress callback
             self.sync_progress.emit("🔍 Scanning filesystem for changes...")
             sync_results = file_index_manager.sync_index_with_filesystem(
-                force_full_sync=False, 
-                progress_callback=progress_callback
+                force_full_sync=False, progress_callback=progress_callback
             )
             
             if self.should_stop:
@@ -344,12 +397,14 @@ class BackgroundSyncWorker(QThread):
             # Ensure the thread properly finishes
             print("🧵 BackgroundSyncWorker thread finishing...")
 
+
 class MaterialCheckBox(QCheckBox):
     """Material Design style checkbox with proper tick mark"""
     
     def __init__(self, text, parent=None):
         super().__init__(text, parent)
-        self.setStyleSheet("""
+        self.setStyleSheet(
+            """
             QCheckBox {
                 color: #FFFFFF;
                 font-size: 13px;
@@ -364,7 +419,8 @@ class MaterialCheckBox(QCheckBox):
                 border: none;
                 background: transparent;
             }
-        """)
+        """
+        )
     
     def paintEvent(self, event):
         """Custom paint event for Material Design checkbox"""
@@ -387,16 +443,24 @@ class MaterialCheckBox(QCheckBox):
             painter.setPen(QPen(QColor("#444444"), 1))  # Very light grey border
         
         # Draw rounded rectangle
-        painter.drawRoundedRect(checkbox_x, checkbox_y, checkbox_size, checkbox_size, 2, 2)  # Smaller radius
+        painter.drawRoundedRect(
+            checkbox_x, checkbox_y, checkbox_size, checkbox_size, 2, 2
+        )  # Smaller radius
         
         # Draw tick mark if checked
         if self.isChecked():
             # Load and draw the tick.png icon
             from PySide6.QtGui import QPixmap
+
             tick_pixmap = QPixmap("_Current version/current/assets/icons/tick.png")
             
             # Scale the tick icon to fit the checkbox
-            scaled_tick = tick_pixmap.scaled(checkbox_size - 4, checkbox_size - 4, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            scaled_tick = tick_pixmap.scaled(
+                checkbox_size - 4,
+                checkbox_size - 4,
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation,
+            )
             
             # Draw the tick icon centered in the checkbox
             tick_x = checkbox_x + (checkbox_size - scaled_tick.width()) // 2
@@ -427,21 +491,25 @@ class FloatingDropdown(QWidget):
         self.parent = parent
         
         # Set up as top-level floating widget
-        self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)
+        self.setWindowFlags(
+            Qt.Tool | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint
+        )
         self.setObjectName(f"{name}DropdownMenu")
         self.setVisible(False)
         self.setMinimumSize(200, 0)
         self.setMaximumSize(200, 16777215)
         
         # Apply consistent styling with more rounded corners
-        self.setStyleSheet("""
+        self.setStyleSheet(
+            """
             QWidget {
                 background-color: #2C2C2E;
                 border: none;
                 border-radius: 12px;
                 margin: 4px 0px;
             }
-        """)
+        """
+        )
         
         # Enable custom painting for rounded corners
         self.setAttribute(Qt.WA_TranslucentBackground)
@@ -471,7 +539,8 @@ class FloatingDropdown(QWidget):
         self.clear_button.setMinimumSize(60, 28)
         self.clear_button.setMaximumSize(60, 28)
         self.clear_button.setCursor(Qt.PointingHandCursor)
-        self.clear_button.setStyleSheet("""
+        self.clear_button.setStyleSheet(
+            """
             QPushButton {
                 background-color: transparent;
                 border: 1px solid #3C3C3E;
@@ -488,7 +557,8 @@ class FloatingDropdown(QWidget):
                 border-color: #4A4A4C;
                 color: #FFFFFF;
             }
-        """)
+        """
+        )
         
         # Close button
         self.close_button = QPushButton("Close")
@@ -496,7 +566,8 @@ class FloatingDropdown(QWidget):
         self.close_button.setMinimumSize(60, 28)
         self.close_button.setMaximumSize(60, 28)
         self.close_button.setCursor(Qt.PointingHandCursor)
-        self.close_button.setStyleSheet("""
+        self.close_button.setStyleSheet(
+            """
             QPushButton {
                 background-color: #3478f6;
                 border: 1px solid #3478f6;
@@ -512,11 +583,14 @@ class FloatingDropdown(QWidget):
                 background-color: #2a70d6;
                 border-color: #2a70d6;
             }
-        """)
+        """
+        )
         
         # Add buttons to layout
         self.buttons_layout.addWidget(self.clear_button)
-        self.buttons_layout.addSpacerItem(QSpacerItem(40, 20, QSizePolicy.Expanding, QSizePolicy.Minimum))
+        self.buttons_layout.addSpacerItem(
+            QSpacerItem(40, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
+        )
         self.buttons_layout.addWidget(self.close_button)
         
         self.layout.addLayout(self.buttons_layout)
@@ -558,7 +632,9 @@ class FloatingDropdown(QWidget):
     
     def get_checked_items(self):
         """Get list of checked item names"""
-        return [name for name, checkbox in self.checkboxes.items() if checkbox.isChecked()]
+        return [
+            name for name, checkbox in self.checkboxes.items() if checkbox.isChecked()
+        ]
     
     def set_checkbox_changed_callback(self, callback):
         """Set callback for when checkboxes change"""
@@ -601,9 +677,7 @@ class MainController(QObject):
         
         # Initialize sub-controllers
         self.search_controller = SearchController(
-            self.search_model, 
-            self.file_model, 
-            self.main_window
+            self.search_model, self.file_model, self.main_window
         )
         
         # Set main controller reference in search controller
@@ -644,7 +718,7 @@ class MainController(QObject):
         self.update_search_summary(text.strip())
         
         # Trigger the search using the search controller
-        if hasattr(self, 'search_controller'):
+        if hasattr(self, "search_controller"):
             self.search_controller.start_search_with_text(text.strip())
     
     # def remove_existing_search_filters(self):
@@ -662,14 +736,20 @@ class MainController(QObject):
     def setup_dropdown_connections(self):
         """Setup connections for filter dropdowns - called after UI is loaded"""
         # Connect the new signal for converting text to filter bubbles
-        if hasattr(self.main_window, 'search_input') and hasattr(self.main_window.search_input, 'textToFilterBubble'):
-            self.main_window.search_input.textToFilterBubble.connect(self.on_text_to_filter_bubble)
+        if hasattr(self.main_window, "search_input") and hasattr(
+            self.main_window.search_input, "textToFilterBubble"
+        ):
+            self.main_window.search_input.textToFilterBubble.connect(
+                self.on_text_to_filter_bubble
+            )
             print("✅ Connected textToFilterBubble signal")
         
         # Removed textChanged connection - search summary only updates when search starts
         
         # Get dropdown buttons
-        instruments_button = self.main_window.findChild(QPushButton, "instrumentsDropdown")
+        instruments_button = self.main_window.findChild(
+            QPushButton, "instrumentsDropdown"
+        )
         genres_button = self.main_window.findChild(QPushButton, "genresDropdown")
         vendor_button = self.main_window.findChild(QPushButton, "vendorDropdown")
         
@@ -681,21 +761,29 @@ class MainController(QObject):
         self.create_unified_dropdowns()
         
         # Connect dropdown buttons
-        if instruments_button and hasattr(self, 'instruments_dropdown'):
-            instruments_button.clicked.connect(lambda: self.toggle_dropdown(self.instruments_dropdown))
+        if instruments_button and hasattr(self, "instruments_dropdown"):
+            instruments_button.clicked.connect(
+                lambda: self.toggle_dropdown(self.instruments_dropdown)
+            )
             print("✅ Connected Instruments dropdown")
-        if genres_button and hasattr(self, 'genres_dropdown'):
-            genres_button.clicked.connect(lambda: self.toggle_dropdown(self.genres_dropdown))
+        if genres_button and hasattr(self, "genres_dropdown"):
+            genres_button.clicked.connect(
+                lambda: self.toggle_dropdown(self.genres_dropdown)
+            )
             print("✅ Connected Genres dropdown")
-        if vendor_button and hasattr(self, 'vendor_dropdown'):
-            vendor_button.clicked.connect(lambda: self.toggle_dropdown(self.vendor_dropdown))
+        if vendor_button and hasattr(self, "vendor_dropdown"):
+            vendor_button.clicked.connect(
+                lambda: self.toggle_dropdown(self.vendor_dropdown)
+            )
             print("✅ Connected Vendor dropdown")
         
         # Setup click outside handler
         self.setup_click_outside_handler()
         
         # Connect Clear All button
-        clear_filters_button = self.main_window.findChild(QPushButton, "clearFiltersButton")
+        clear_filters_button = self.main_window.findChild(
+            QPushButton, "clearFiltersButton"
+        )
         if clear_filters_button:
             clear_filters_button.clicked.connect(self.clear_all_filters)
             print("✅ Connected Clear All button")
@@ -709,39 +797,47 @@ class MainController(QObject):
         """Create all dropdowns using the unified FloatingDropdown class"""
         # Define dropdown configurations
         dropdown_configs = {
-            'instruments': [
+            "instruments": [
                 ("instrumentsSynth", "synth (11)"),
                 ("instrumentsDrums", "drums (2)"),
                 ("instrumentsVocals", "vocals (2)"),
                 ("instrumentsSnares", "snares (1)"),
                 ("instrumentsModular", "modular (1)"),
-                ("instrumentsPercussion", "percussion (1)")
+                ("instrumentsPercussion", "percussion (1)"),
             ],
-            'genres': [
+            "genres": [
                 ("genresAction", "action (8)"),
                 ("genresTrailer", "trailer (6)"),
                 ("genresJazz", "jazz (3)"),
-                ("genresElectronic", "electronic (2)")
+                ("genresElectronic", "electronic (2)"),
             ],
-            'vendor': [
+            "vendor": [
                 ("vendorNativeInstruments", "Native Instruments (15)"),
                 ("vendorSpitfire", "Spitfire Audio (12)"),
                 ("vendorEastWest", "EastWest (8)"),
-                ("vendorAuthenticSoundware", "Authentic Soundware (3)")
-            ]
+                ("vendorAuthenticSoundware", "Authentic Soundware (3)"),
+            ],
         }
         
         # Create dropdowns using unified class
-        self.instruments_dropdown = FloatingDropdown('instruments', dropdown_configs['instruments'])
-        self.genres_dropdown = FloatingDropdown('genres', dropdown_configs['genres'])
-        self.vendor_dropdown = FloatingDropdown('vendor', dropdown_configs['vendor'])
+        self.instruments_dropdown = FloatingDropdown(
+            "instruments", dropdown_configs["instruments"]
+        )
+        self.genres_dropdown = FloatingDropdown("genres", dropdown_configs["genres"])
+        self.vendor_dropdown = FloatingDropdown("vendor", dropdown_configs["vendor"])
         
         print("✅ Created all dropdown menus")
         
         # Set up checkbox change callbacks
-        self.instruments_dropdown.set_checkbox_changed_callback(self.on_filter_checkbox_changed)
-        self.genres_dropdown.set_checkbox_changed_callback(self.on_filter_checkbox_changed)
-        self.vendor_dropdown.set_checkbox_changed_callback(self.on_filter_checkbox_changed)
+        self.instruments_dropdown.set_checkbox_changed_callback(
+            self.on_filter_checkbox_changed
+        )
+        self.genres_dropdown.set_checkbox_changed_callback(
+            self.on_filter_checkbox_changed
+        )
+        self.vendor_dropdown.set_checkbox_changed_callback(
+            self.on_filter_checkbox_changed
+        )
         
         print("✅ Set up checkbox change callbacks")
     
@@ -782,7 +878,9 @@ class MainController(QObject):
                 dropdown_y = button_global_pos.y() + 4  # Small gap below button
                 
                 dropdown_menu.move(dropdown_x, dropdown_y)
-                print(f"🔍 Positioned {dropdown_menu.objectName()} at global ({dropdown_x}, {dropdown_y}) - floating freely")
+                print(
+                    f"🔍 Positioned {dropdown_menu.objectName()} at global ({dropdown_x}, {dropdown_y}) - floating freely"
+                )
             else:
                 print(f"⚠️ Could not find button {button_name}")
         else:
@@ -790,11 +888,11 @@ class MainController(QObject):
     
     def hide_all_dropdowns(self):
         """Hide all dropdown menus"""
-        if hasattr(self, 'instruments_dropdown'):
+        if hasattr(self, "instruments_dropdown"):
             self.instruments_dropdown.setVisible(False)
-        if hasattr(self, 'genres_dropdown'):
+        if hasattr(self, "genres_dropdown"):
             self.genres_dropdown.setVisible(False)
-        if hasattr(self, 'vendor_dropdown'):
+        if hasattr(self, "vendor_dropdown"):
             self.vendor_dropdown.setVisible(False)
     
     def setup_click_outside_handler(self):
@@ -810,11 +908,11 @@ class MainController(QObject):
         if event.type() == QEvent.MouseButtonPress:
             # Check if click is outside dropdown menus
             dropdowns = []
-            if hasattr(self, 'instruments_dropdown'):
+            if hasattr(self, "instruments_dropdown"):
                 dropdowns.append(self.instruments_dropdown)
-            if hasattr(self, 'genres_dropdown'):
+            if hasattr(self, "genres_dropdown"):
                 dropdowns.append(self.genres_dropdown)
-            if hasattr(self, 'vendor_dropdown'):
+            if hasattr(self, "vendor_dropdown"):
                 dropdowns.append(self.vendor_dropdown)
             
             for dropdown in dropdowns:
@@ -826,7 +924,10 @@ class MainController(QObject):
                     
                     # Create global rect for the dropdown
                     from PySide6.QtCore import QRect
-                    dropdown_global_rect = QRect(dropdown_global_pos, dropdown_rect.size())
+
+                    dropdown_global_rect = QRect(
+                        dropdown_global_pos, dropdown_rect.size()
+                    )
                     
                     if not dropdown_global_rect.contains(click_global_pos):
                         dropdown.setVisible(False)
@@ -855,8 +956,12 @@ class MainController(QObject):
     def setup_filter_management(self):
         """Setup filter management after UI is loaded"""
         # Get the filter tags container and summary label
-        self.filter_tags_container = self.main_window.findChild(QWidget, "filterTagsContainer")
-        self.filter_summary_label = self.main_window.findChild(QLabel, "filterSummaryLabel")
+        self.filter_tags_container = self.main_window.findChild(
+            QWidget, "filterTagsContainer"
+        )
+        self.filter_summary_label = self.main_window.findChild(
+            QLabel, "filterSummaryLabel"
+        )
         
         print(f"🔍 Debug - Main window: {self.main_window}")
         print(f"🔍 Debug - Filter tags container: {self.filter_tags_container}")
@@ -893,7 +998,10 @@ class MainController(QObject):
     
     def remove_filter(self, filter_type, filter_value):
         """Remove a filter and its bubble"""
-        if filter_type in self.active_filters and filter_value in self.active_filters[filter_type]:
+        if (
+            filter_type in self.active_filters
+            and filter_value in self.active_filters[filter_type]
+        ):
             self.active_filters[filter_type].remove(filter_value)
             
             # Clean up empty filter type entries
@@ -912,12 +1020,14 @@ class MainController(QObject):
             
             # Check if no more active filters - clear the tree and stop search
             if not self.active_filters:
-                print("🔍 No more active filters - clearing results tree and stopping search")
-                if hasattr(self, 'main_window') and self.main_window:
+                print(
+                    "🔍 No more active filters - clearing results tree and stopping search"
+                )
+                if hasattr(self, "main_window") and self.main_window:
                     self.main_window.clear_results()
                 
                 # Stop any running search since there's nothing to search for
-                if hasattr(self, 'search_controller') and self.search_controller:
+                if hasattr(self, "search_controller") and self.search_controller:
                     self.search_controller.on_search_cancelled()
                     print("🔍 Cancelled running search - no filters active")
             
@@ -931,9 +1041,9 @@ class MainController(QObject):
         """Uncheck the corresponding dropdown item when a filter is removed"""
         # Map filter types to dropdown names
         dropdown_map = {
-            'Instrument': 'instruments',
-            'Genre': 'genres', 
-            'Vendor': 'vendor'
+            "Instrument": "instruments",
+            "Genre": "genres",
+            "Vendor": "vendor",
         }
         
         dropdown_name = dropdown_map.get(filter_type)
@@ -941,35 +1051,35 @@ class MainController(QObject):
             return
         
         # Get the dropdown
-        dropdown = getattr(self, f'{dropdown_name}_dropdown', None)
+        dropdown = getattr(self, f"{dropdown_name}_dropdown", None)
         if not dropdown:
             return
         
         # Map filter value back to item name for the dropdown
-        if dropdown_name == 'instruments':
+        if dropdown_name == "instruments":
             value_to_item_map = {
-                'Synth': 'instrumentsSynth',
-                'Drums': 'instrumentsDrums',
-                'Vocals': 'instrumentsVocals',
-                'Snares': 'instrumentsSnares',
-                'Modular': 'instrumentsModular',
-                'Percussion': 'instrumentsPercussion',
-                'Piano': 'instrumentsPiano'
+                "Synth": "instrumentsSynth",
+                "Drums": "instrumentsDrums",
+                "Vocals": "instrumentsVocals",
+                "Snares": "instrumentsSnares",
+                "Modular": "instrumentsModular",
+                "Percussion": "instrumentsPercussion",
+                "Piano": "instrumentsPiano",
             }
-        elif dropdown_name == 'genres':
+        elif dropdown_name == "genres":
             value_to_item_map = {
-                'Action': 'genresAction',
-                'Trailer': 'genresTrailer',
-                'Jazz': 'genresJazz',
-                'Electronic': 'genresElectronic',
-                'Dark': 'genresDark'
+                "Action": "genresAction",
+                "Trailer": "genresTrailer",
+                "Jazz": "genresJazz",
+                "Electronic": "genresElectronic",
+                "Dark": "genresDark",
             }
-        elif dropdown_name == 'vendor':
+        elif dropdown_name == "vendor":
             value_to_item_map = {
-                'Native Instruments': 'vendorNativeInstruments',
-                'Spitfire': 'vendorSpitfire',
-                'EastWest': 'vendorEastWest',
-                'Authentic Soundware': 'vendorAuthenticSoundware'
+                "Native Instruments": "vendorNativeInstruments",
+                "Spitfire": "vendorSpitfire",
+                "EastWest": "vendorEastWest",
+                "Authentic Soundware": "vendorAuthenticSoundware",
             }
         else:
             value_to_item_map = {}
@@ -977,7 +1087,7 @@ class MainController(QObject):
         item_name = value_to_item_map.get(filter_value, filter_value)
         
         # Uncheck the checkbox in the dropdown
-        if hasattr(dropdown, 'checkboxes') and item_name in dropdown.checkboxes:
+        if hasattr(dropdown, "checkboxes") and item_name in dropdown.checkboxes:
             checkbox = dropdown.checkboxes[item_name]
             checkbox.setChecked(False)
             print(f"🔍 Unchecked dropdown item: {dropdown_name} -> {item_name}")
@@ -1008,7 +1118,9 @@ class MainController(QObject):
             layout.addWidget(bubble)
             
             # Add a spacer to push bubbles to the left
-            spacer = QSpacerItem(40, 20, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+            spacer = QSpacerItem(
+                40, 20, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum
+            )
             layout.addItem(spacer)
             
             # Store reference to bubble
@@ -1022,7 +1134,9 @@ class MainController(QObject):
             # Remove immediately like search bubbles (no animation delay)
             from PySide6.QtWidgets import QSpacerItem, QSizePolicy
             
-            layout = self.filter_tags_container.findChild(QHBoxLayout, "filterTagsLayout")
+            layout = self.filter_tags_container.findChild(
+                QHBoxLayout, "filterTagsLayout"
+            )
             if layout:
                 layout.removeWidget(bubble)
                 bubble.deleteLater()
@@ -1036,7 +1150,9 @@ class MainController(QObject):
                 
                 # If there are still bubbles, add the spacer back
                 if layout.count() > 0:
-                    spacer = QSpacerItem(40, 20, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+                    spacer = QSpacerItem(
+                        40, 20, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum
+                    )
                     layout.addItem(spacer)
             
             del self.filter_tags[filter_value]
@@ -1076,7 +1192,9 @@ class MainController(QObject):
             self.filter_summary_label.setVisible(True)
         else:
             self.filter_summary_label.setText("")
-            self.filter_summary_label.setVisible(True)  # Keep visible to maintain consistent spacing
+            self.filter_summary_label.setVisible(
+                True
+            )  # Keep visible to maintain consistent spacing
     
     def update_search_summary(self, search_text: str):
         """Update the filter summary text to include search term when search starts"""
@@ -1093,7 +1211,7 @@ class MainController(QObject):
         if search_text and summary_parts:
             summary_text = f"{SEARCH_RESULTS_LABEL} \"{search_text}\". Filtered by: {', '.join(summary_parts)}"
         elif search_text:
-            summary_text = f"{SEARCH_RESULTS_LABEL} \"{search_text}\""
+            summary_text = f'{SEARCH_RESULTS_LABEL} "{search_text}"'
         elif summary_parts:
             summary_text = f"Filtered by: {', '.join(summary_parts)}"
         else:
@@ -1104,7 +1222,9 @@ class MainController(QObject):
             self.filter_summary_label.setVisible(True)
         else:
             self.filter_summary_label.setText("")
-            self.filter_summary_label.setVisible(True)  # Keep visible to maintain consistent spacing
+            self.filter_summary_label.setVisible(
+                True
+            )  # Keep visible to maintain consistent spacing
     
     def get_active_filters(self):
         """Get all active filters"""
@@ -1143,16 +1263,18 @@ class MainController(QObject):
     def uncheck_all_dropdown_items(self):
         """Uncheck all dropdown checkboxes when clearing all filters"""
         # Uncheck all checkboxes in all dropdowns
-        for dropdown_name in ['instruments', 'genres', 'vendor']:
-            dropdown = getattr(self, f'{dropdown_name}_dropdown', None)
-            if dropdown and hasattr(dropdown, 'checkboxes'):
+        for dropdown_name in ["instruments", "genres", "vendor"]:
+            dropdown = getattr(self, f"{dropdown_name}_dropdown", None)
+            if dropdown and hasattr(dropdown, "checkboxes"):
                 for checkbox in dropdown.checkboxes.values():
                     checkbox.setChecked(False)
                 print(f"🔍 Unchecked all items in {dropdown_name} dropdown")
     
     def remove_filter_bubble_callback(self, filter_type, filter_value):
         """Callback for when a filter bubble is removed"""
-        print(f"🔍 Filter bubble X clicked: filter_type={filter_type}, filter_value={filter_value}")
+        print(
+            f"🔍 Filter bubble X clicked: filter_type={filter_type}, filter_value={filter_value}"
+        )
         print(f"🔍 Current active_filters before removal: {self.active_filters}")
         
         # Find which filter type this value belongs to
@@ -1168,41 +1290,41 @@ class MainController(QObject):
         """Handle filter checkbox changes"""
         # Map dropdown names to filter types
         filter_type_map = {
-            'instruments': 'Instrument',
-            'genres': 'Genre', 
-            'vendor': 'Vendor'
+            "instruments": "Instrument",
+            "genres": "Genre",
+            "vendor": "Vendor",
         }
         
         filter_type = filter_type_map.get(dropdown_name, dropdown_name.title())
         
         # Extract the display value from item name (remove the prefix)
-        if dropdown_name == 'instruments':
+        if dropdown_name == "instruments":
             # Map item names to display values
             value_map = {
-                'instrumentsSynth': 'Synth',
-                'instrumentsDrums': 'Drums',
-                'instrumentsVocals': 'Vocals',
-                'instrumentsSnares': 'Snares',
-                'instrumentsModular': 'Modular',
-                'instrumentsPercussion': 'Percussion',
-                'instrumentsPiano': 'Piano'  # Added Piano
+                "instrumentsSynth": "Synth",
+                "instrumentsDrums": "Drums",
+                "instrumentsVocals": "Vocals",
+                "instrumentsSnares": "Snares",
+                "instrumentsModular": "Modular",
+                "instrumentsPercussion": "Percussion",
+                "instrumentsPiano": "Piano",  # Added Piano
             }
             filter_value = value_map.get(item_name, item_name)
-        elif dropdown_name == 'genres':
+        elif dropdown_name == "genres":
             value_map = {
-                'genresAction': 'Action',
-                'genresTrailer': 'Trailer',
-                'genresJazz': 'Jazz',
-                'genresElectronic': 'Electronic',
-                'genresDark': 'Dark'  # Added Dark
+                "genresAction": "Action",
+                "genresTrailer": "Trailer",
+                "genresJazz": "Jazz",
+                "genresElectronic": "Electronic",
+                "genresDark": "Dark",  # Added Dark
             }
             filter_value = value_map.get(item_name, item_name)
-        elif dropdown_name == 'vendor':
+        elif dropdown_name == "vendor":
             value_map = {
-                'vendorNativeInstruments': 'Native Instruments',
-                'vendorSpitfire': 'Spitfire',  # Changed to just "Spitfire"
-                'vendorEastWest': 'EastWest',
-                'vendorAuthenticSoundware': 'Authentic Soundware'
+                "vendorNativeInstruments": "Native Instruments",
+                "vendorSpitfire": "Spitfire",  # Changed to just "Spitfire"
+                "vendorEastWest": "EastWest",
+                "vendorAuthenticSoundware": "Authentic Soundware",
             }
             filter_value = value_map.get(item_name, item_name)
         else:
@@ -1216,7 +1338,7 @@ class MainController(QObject):
             self.remove_filter(filter_type, filter_value)
         
         # Close the dropdown after selection
-        dropdown = getattr(self, f'{dropdown_name}_dropdown', None)
+        dropdown = getattr(self, f"{dropdown_name}_dropdown", None)
         if dropdown:
             dropdown.hide()
     
@@ -1229,17 +1351,17 @@ class MainController(QObject):
             
             # Get database path
             config_dir = appdirs.user_config_dir(APP_NAME, APP_AUTHOR)
-            db_path = os.path.join(config_dir, 'patchio_index.db')
+            db_path = os.path.join(config_dir, "patchio_index.db")
             
             # Get indexed folders from settings
-            indexed_folders = set(self.settings_model.get_setting('search_folders', []))
+            indexed_folders = set(self.settings_model.get_setting("search_folders", []))
             
             if indexed_folders:
                 # Create comprehensive file index manager
                 self.file_index_manager = FileIndexManager(db_path, indexed_folders)
                 
                 # Only start sync worker if one doesn't already exist
-                if not hasattr(self, 'sync_worker') or self.sync_worker is None:
+                if not hasattr(self, "sync_worker") or self.sync_worker is None:
                     # Start background sync worker to avoid blocking UI
                     print("🔄 Starting background file index sync...")
                     self.sync_worker = BackgroundSyncWorker(db_path, indexed_folders)
@@ -1257,12 +1379,20 @@ class MainController(QObject):
                 
                 # Start real-time monitoring immediately (doesn't block)
                 def handle_file_event(event):
-                    print(f"📁 Real-time event: {event.event_type} - {os.path.basename(event.path)}")
+                    print(
+                        f"📁 Real-time event: {event.event_type} - {os.path.basename(event.path)}"
+                    )
                 
                 self.file_index_manager.start_real_time_monitoring(handle_file_event)
-                print("✅ File index manager started for {} folders".format(len(indexed_folders)))
+                print(
+                    "✅ File index manager started for {} folders".format(
+                        len(indexed_folders)
+                    )
+                )
             else:
-                print("⚠️ File index manager not started - no indexed folders configured")
+                print(
+                    "⚠️ File index manager not started - no indexed folders configured"
+                )
                 
         except Exception as e:
             print("❌ Failed to setup file index manager: {}".format(e))
@@ -1274,12 +1404,12 @@ class MainController(QObject):
     def _on_scan_progress(self, progress_info: dict):
         """🚀 Handle detailed scan progress updates"""
         # Update the main window with detailed progress information
-        if hasattr(self.main_window, 'update_scan_progress_data'):
+        if hasattr(self.main_window, "update_scan_progress_data"):
             self.main_window.update_scan_progress_data(progress_info)
     
     def _on_start_scan_ui(self):
         """🚀 Handle start scan UI signal"""
-        if hasattr(self.main_window, 'start_scan_progress'):
+        if hasattr(self.main_window, "start_scan_progress"):
             self.main_window.start_scan_progress()
     
     def _on_sync_completed(self, sync_results: dict):
@@ -1287,32 +1417,36 @@ class MainController(QObject):
         print(f"✅ Background sync completed: {sync_results}")
         
         # Print detailed completion message
-        sync_time = sync_results.get('sync_time', 0)
-        files_added = sync_results.get('files_added', 0)
-        files_removed = sync_results.get('files_removed', 0)
-        files_updated = sync_results.get('files_updated', 0)
+        sync_time = sync_results.get("sync_time", 0)
+        files_added = sync_results.get("files_added", 0)
+        files_removed = sync_results.get("files_removed", 0)
+        files_updated = sync_results.get("files_updated", 0)
         
         if files_added > 0 or files_removed > 0 or files_updated > 0:
-            print(f"✅ Background sync completed in {sync_time:.2f}s: +{files_added} -{files_removed} ~{files_updated}")
+            print(
+                f"✅ Background sync completed in {sync_time:.2f}s: +{files_added} -{files_removed} ~{files_updated}"
+            )
         else:
-            print(f"⚡ Background sync completed in {sync_time:.2f}s: No changes needed")
+            print(
+                f"⚡ Background sync completed in {sync_time:.2f}s: No changes needed"
+            )
         
         # 🚀 Complete scan progress in UI
-        if hasattr(self.main_window, 'complete_scan_progress'):
+        if hasattr(self.main_window, "complete_scan_progress"):
             self.main_window.complete_scan_progress(sync_results)
         
         # Start vendor extraction worker after sync completes
         self._start_vendor_extraction_worker()
         
         # Properly clean up the sync worker thread with a slight delay
-        if hasattr(self, 'sync_worker') and self.sync_worker:
+        if hasattr(self, "sync_worker") and self.sync_worker:
             print("🧹 Cleaning up sync worker thread...")
             # Use QTimer to delay cleanup slightly to ensure thread has finished
             QTimer.singleShot(100, self._cleanup_sync_worker)
     
     def _cleanup_sync_worker(self):
         """Clean up the sync worker thread"""
-        if hasattr(self, 'sync_worker') and self.sync_worker:
+        if hasattr(self, "sync_worker") and self.sync_worker:
             print("🧹 Performing sync worker cleanup...")
             self.sync_worker.quit()
             self.sync_worker.wait(5000)  # Wait up to 5 seconds for thread to finish
@@ -1332,10 +1466,13 @@ class MainController(QObject):
             
             # Get database path
             config_dir = appdirs.user_config_dir(APP_NAME, APP_AUTHOR)
-            db_path = os.path.join(config_dir, 'patchio_index.db')
+            db_path = os.path.join(config_dir, "patchio_index.db")
             
             # Only start if we don't already have one running
-            if not hasattr(self, 'vendor_extraction_worker') or self.vendor_extraction_worker is None:
+            if (
+                not hasattr(self, "vendor_extraction_worker")
+                or self.vendor_extraction_worker is None
+            ):
                 print("🔍 Starting background vendor extraction...")
                 self.vendor_extraction_worker = BackgroundVendorExtractionWorker(db_path)
                 self.vendor_extraction_worker.extraction_progress.connect(self._on_vendor_extraction_progress)
@@ -1353,16 +1490,18 @@ class MainController(QObject):
     
     def _on_vendor_extraction_completed(self, results: dict):
         """Handle vendor extraction completion"""
-        files_processed = results.get('files_processed', 0)
-        files_updated = results.get('files_updated', 0)
+        files_processed = results.get("files_processed", 0)
+        files_updated = results.get("files_updated", 0)
         
         if files_updated > 0:
-            print(f"✅ Vendor extraction completed: {files_updated} files updated with vendor/library information")
+            print(
+                f"✅ Vendor extraction completed: {files_updated} files updated with vendor/library information"
+            )
         else:
             print("✅ Vendor extraction completed: No files needed updating")
         
         # Clean up the vendor extraction worker
-        if hasattr(self, 'vendor_extraction_worker') and self.vendor_extraction_worker:
+        if hasattr(self, "vendor_extraction_worker") and self.vendor_extraction_worker:
             self.vendor_extraction_worker.quit()
             self.vendor_extraction_worker.wait(5000)
             if self.vendor_extraction_worker.isRunning():
@@ -1376,15 +1515,14 @@ class MainController(QObject):
         print(f"❌ Background sync failed: {error_message}")
         
         # 🚀 Cancel scan progress in UI
-        if hasattr(self.main_window, 'cancel_scan_progress'):
+        if hasattr(self.main_window, "cancel_scan_progress"):
             self.main_window.cancel_scan_progress()
         
         # Properly clean up the sync worker thread with a slight delay
-        if hasattr(self, 'sync_worker') and self.sync_worker:
+        if hasattr(self, "sync_worker") and self.sync_worker:
             print("🧹 Cleaning up sync worker thread after failure...")
             # Use QTimer to delay cleanup slightly to ensure thread has finished
             QTimer.singleShot(100, self._cleanup_sync_worker)
-    
     
     def _handle_file_event(self, event: FileEvent):
         """Handle file system events from the professional watcher"""
@@ -1396,19 +1534,19 @@ class MainController(QObject):
             
             # Get database path
             config_dir = appdirs.user_config_dir(APP_NAME, APP_AUTHOR)
-            db_path = os.path.join(config_dir, 'patchio_index.db')
+            db_path = os.path.join(config_dir, "patchio_index.db")
             
             # Initialize event tracking if needed
             init_event_tracking_db(db_path)
             
             # Process the event based on type
-            if event.event_type == 'created':
+            if event.event_type == "created":
                 self._add_file_to_database(db_path, event.path)
-            elif event.event_type == 'deleted':
+            elif event.event_type == "deleted":
                 self._remove_file_from_database(db_path, event.path)
-            elif event.event_type == 'moved':
+            elif event.event_type == "moved":
                 self._move_file_in_database(db_path, event.path, event.dest_path)
-            elif event.event_type == 'modified':
+            elif event.event_type == "modified":
                 self._update_file_in_database(db_path, event.path)
             
             # Log the event
@@ -1424,10 +1562,11 @@ class MainController(QObject):
             cursor = conn.cursor()
             
             # Get indexed folders from settings
-            indexed_folders = set(self.settings_model.get_setting('search_folders', []))
+            indexed_folders = set(self.settings_model.get_setting("search_folders", []))
             
             # Use the existing file watcher logic
             from utils.database.file_watcher import PatchIOFileHandler
+
             handler = PatchIOFileHandler(db_path, indexed_folders)
             handler._add_file_to_db(cursor, file_path)
             
@@ -1444,10 +1583,11 @@ class MainController(QObject):
             cursor = conn.cursor()
             
             # Get indexed folders from settings
-            indexed_folders = set(self.settings_model.get_setting('search_folders', []))
+            indexed_folders = set(self.settings_model.get_setting("search_folders", []))
             
             # Use the existing file watcher logic
             from utils.database.file_watcher import PatchIOFileHandler
+
             handler = PatchIOFileHandler(db_path, indexed_folders)
             handler._remove_file_from_db(cursor, file_path)
             
@@ -1464,10 +1604,11 @@ class MainController(QObject):
             cursor = conn.cursor()
             
             # Get indexed folders from settings
-            indexed_folders = set(self.settings_model.get_setting('search_folders', []))
+            indexed_folders = set(self.settings_model.get_setting("search_folders", []))
             
             # Use the existing file watcher logic
             from utils.database.file_watcher import PatchIOFileHandler
+
             handler = PatchIOFileHandler(db_path, indexed_folders)
             handler._move_file_in_db(cursor, old_path, new_path)
             
@@ -1484,10 +1625,11 @@ class MainController(QObject):
             cursor = conn.cursor()
             
             # Get indexed folders from settings
-            indexed_folders = set(self.settings_model.get_setting('search_folders', []))
+            indexed_folders = set(self.settings_model.get_setting("search_folders", []))
             
             # Use the existing file watcher logic
             from utils.database.file_watcher import PatchIOFileHandler
+
             handler = PatchIOFileHandler(db_path, indexed_folders)
             handler._update_file_in_db(cursor, file_path)
             
@@ -1497,16 +1639,14 @@ class MainController(QObject):
         except Exception as e:
             print(f"❌ Error updating file in database: {e}")
     
-    
-    
     def stop_file_watcher(self):
         """Stop the file index manager when application closes"""
-        if hasattr(self, 'file_index_manager') and self.file_index_manager:
+        if hasattr(self, "file_index_manager") and self.file_index_manager:
             self.file_index_manager.stop_real_time_monitoring()
             print("🛑 File index manager stopped")
         
         # Stop background sync worker if running
-        if hasattr(self, 'sync_worker') and self.sync_worker.isRunning():
+        if hasattr(self, "sync_worker") and self.sync_worker.isRunning():
             self.sync_worker.quit()
             self.sync_worker.wait()
     
@@ -1520,7 +1660,7 @@ class MainController(QObject):
         Returns:
             Dictionary with sync statistics
         """
-        if hasattr(self, 'file_index_manager') and self.file_index_manager:
+        if hasattr(self, "file_index_manager") and self.file_index_manager:
             return self.file_index_manager.sync_index_with_filesystem(force_full_sync)
         else:
             print("⚠️ File index manager not available")
@@ -1528,18 +1668,18 @@ class MainController(QObject):
     
     def get_file_metadata(self, file_path: str) -> Optional[Dict]:
         """Get metadata for a specific file"""
-        if hasattr(self, 'file_index_manager') and self.file_index_manager:
+        if hasattr(self, "file_index_manager") and self.file_index_manager:
             return self.file_index_manager.get_file_metadata(file_path)
         return None
     
     def update_file_metadata(self, file_path: str, metadata: Dict):
         """Update metadata for a specific file"""
-        if hasattr(self, 'file_index_manager') and self.file_index_manager:
+        if hasattr(self, "file_index_manager") and self.file_index_manager:
             self.file_index_manager.update_file_metadata(file_path, metadata)
     
     def search_files(self, query: str, limit: int = 100) -> List[Dict]:
         """Search for files in the index"""
-        if hasattr(self, 'file_index_manager') and self.file_index_manager:
+        if hasattr(self, "file_index_manager") and self.file_index_manager:
             return self.file_index_manager.search_files(query, limit)
         return []
     

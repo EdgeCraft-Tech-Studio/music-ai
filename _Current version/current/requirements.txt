@@ -36,3 +36,5 @@ google-api-python-client>=2.0.0
 python-rtmidi>=1.4.0
 pygetwindow>=0.0.9
 pywinauto>=0.6.8 
+elasticsearch>=8.0.0
+elasticsearch-dsl>=8.0.0

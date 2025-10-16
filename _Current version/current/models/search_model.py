@@ -19,30 +19,36 @@ try:
     parent_dir = os.path.dirname(os.path.dirname(__file__))
     if parent_dir not in sys.path:
         sys.path.insert(0, parent_dir)
-    
+
     from settings.core_settings import (
         MAX_RESULTS_PER_LIBRARY,
         MAX_TOTAL_RESULTS,
-        GENRE_KEYWORDS
+        GENRE_KEYWORDS,
     )
-    
+
     # Try to import logger, but don't fail if it's not initialized yet
     try:
         from utils.logger import info, debug, warning, error, critical
+
         info("✅ Successfully imported settings from settings.core_settings")
     except RuntimeError:
         # Logger not initialized yet, use print instead
         print("✅ Successfully imported settings from settings.core_settings")
-        
+
 except ImportError as e:
     # Try to use logger, but fall back to print if not available
     try:
         from utils.logger import critical, error
+
         critical("❌ CRITICAL ERROR: Cannot import settings.core_settings")
         error("🔍 Error details: {}".format(e))
         error("🔍 Current working directory: {}".format(os.getcwd()))
         error("🔍 File location: {}".format(__file__))
-        error("🔍 Expected settings file: {}".format(os.path.join(parent_dir, 'settings', 'core_settings.py')))
+        error(
+            "🔍 Expected settings file: {}".format(
+                os.path.join(parent_dir, "settings", "core_settings.py")
+            )
+        )
         error("")
         error("❌ Application cannot start without settings.core_settings")
         error("❌ Please ensure settings/core_settings.py exists and is accessible")
@@ -51,82 +57,91 @@ except ImportError as e:
         print("🔍 Error details: {}".format(e))
         print("🔍 Current working directory: {}".format(os.getcwd()))
         print("🔍 File location: {}".format(__file__))
-        print("🔍 Expected settings file: {}".format(os.path.join(parent_dir, 'settings', 'core_settings.py')))
+        print(
+            "🔍 Expected settings file: {}".format(
+                os.path.join(parent_dir, "settings", "core_settings.py")
+            )
+        )
         print("")
         print("❌ Application cannot start without settings.core_settings")
         print("❌ Please ensure settings/core_settings.py exists and is accessible")
     raise ImportError("Failed to import settings.core_settings: {}".format(e))
 
+
 class SearchModel:
     """Model for search functionality - handles all search logic"""
-    
+
     def __init__(self, user_settings_model=None):
         self.last_results = []
         self.search_folders = []
         # Use user settings if provided, otherwise fall back to defaults
         if user_settings_model:
-            self.selected_extensions = user_settings_model.get_setting('extensions', [])
+            self.selected_extensions = user_settings_model.get_setting("extensions", [])
             self.user_settings = user_settings_model
         else:
             # Fallback to core settings defaults
             from settings.core_settings import DEFAULT_EXTENSIONS
+
             self.selected_extensions = DEFAULT_EXTENSIONS
             self.user_settings = None
-        
+
         # Database path for index search - use app data folder
         self.db_path = self._get_database_path()
-    
+
     def _get_database_path(self) -> str:
         """Get the database path using the same method as other settings files"""
         # Use the same app identity as user_settings_model.py
         from settings.core_settings import APP_NAME, APP_AUTHOR
-        
+
         # Use appdirs to get the config directory (same as user_settings_model.py)
         config_dir = appdirs.user_config_dir(APP_NAME, APP_AUTHOR)
         os.makedirs(config_dir, exist_ok=True)
-        
+
         # Return the full path to the database file in the config directory
         return os.path.join(config_dir, "patchio_index.db")
-        
+
     def setup_default_folders(self) -> None:
         """Setup default folders from user settings"""
         try:
             if self.user_settings:
                 # Use user settings for search folders
-                search_folders = self.user_settings.get_setting('search_folders', [])
+                search_folders = self.user_settings.get_setting("search_folders", [])
                 existing_folders = [f for f in search_folders if os.path.exists(f)]
                 self.set_search_folders(existing_folders)
                 info("📁 User search folders: {}".format(existing_folders))
             else:
                 # Fallback to core settings
                 from settings.core_settings import DEFAULT_SEARCH_FOLDERS
-                existing_folders = [f for f in DEFAULT_SEARCH_FOLDERS if os.path.exists(f)]
+
+                existing_folders = [
+                    f for f in DEFAULT_SEARCH_FOLDERS if os.path.exists(f)
+                ]
                 self.set_search_folders(existing_folders)
                 info("📁 Default search folders: {}".format(existing_folders))
-            
+
             # Test if we can find any files at all
             try:
                 self.test_search_setup()
             except Exception as e:
                 warning("⚠️ Test search setup failed: {}".format(e))
                 warning("⚠️ Continuing without test search setup")
-                
+
         except Exception as e:
             warning("⚠️ Setup default folders failed: {}".format(e))
             self.search_folders = []
             warning("⚠️ Using empty search folders as fallback")
-    
+
     def set_search_folders(self, folders: List[str]) -> None:
         """Set the folders to search in"""
         self.search_folders = [Path(f) for f in folders if os.path.exists(f)]
         debug(f"🔧 Search folders configured: {[str(f) for f in self.search_folders]}")
-    
+
     def test_search_setup(self) -> None:
         """Test if search setup is working by counting files"""
         try:
             debug("🧪 Testing search setup...")
             total_files = 0
-            
+
             for folder in self.search_folders:
                 folder_files = 0
                 try:
@@ -139,28 +154,32 @@ class SearchModel:
                     debug("  📂 {}: Found {} files".format(folder, folder_files))
                 except (PermissionError, OSError) as e:
                     warning("  ⚠️ Cannot access {}: {}".format(folder, e))
-            
-            debug("🧪 Test complete: Found {} files across all folders".format(total_files))
+
+            debug(
+                "🧪 Test complete: Found {} files across all folders".format(
+                    total_files
+                )
+            )
             if total_files == 0:
                 warning("⚠️ WARNING: No files found in any search folder!")
-                
+
         except Exception as e:
             warning("⚠️ Test search setup failed: {}".format(e))
             warning("⚠️ Continuing without test results")
-    
+
     def simple_search(self, query: str) -> List[Dict[str, Any]]:
         """Perform simple filename search"""
         info(f"📁 Simple Search: {query}")
         debug(f"🔍 Searching in folders: {[str(f) for f in self.search_folders]}")
-        
+
         if not self.search_folders:
             warning("⚠️ No search folders configured!")
             return []
-        
+
         if not query.strip():
             warning("⚠️ Empty search query!")
             return []
-        
+
         # Parse search terms exactly like patchio.py
         try:
             simple_raw = query.strip().lower()
@@ -169,103 +188,113 @@ class SearchModel:
         except Exception as e:
             error(f"⚠️ Error parsing search terms: {e}")
             return []
-        
+
         if not or_terms:
             warning("⚠️ No valid search terms found!")
             return []
-        
+
         results = []
         excluded_folders = []  # Using dummy empty list as requested
-        
+
         # Search each folder using the exact patchio.py logic
         for folder in self.search_folders:
             if not folder.exists():
                 warning(f"⚠️ Folder doesn't exist: {folder}")
                 continue
-                
+
             debug(f"📂 Searching in: {folder}")
             folder_matches = 0
-            
+
             try:
                 # Use the exact recursive_scan from patchio.py
-                for file_path in self._recursive_scan(str(folder), self.selected_extensions, excluded_folders):
+                for file_path in self._recursive_scan(
+                    str(folder), self.selected_extensions, excluded_folders
+                ):
                     full_path = file_path.lower()
-                    
+
                     # Classic search mode logic: OR matching (exact from patchio.py line 2321)
-                    if any(self._matches_term(term, full_path, quoted) for term, quoted in zip(or_terms, or_quoted)):
+                    if any(
+                        self._matches_term(term, full_path, quoted)
+                        for term, quoted in zip(or_terms, or_quoted)
+                    ):
                         folder_matches += 1
-                        
+
                         # Get file info
                         file_name = os.path.basename(file_path)
-                        
-                        results.append({
-                            "name": file_name,
-                            "path": file_path,
-                            "type": f"Simple Match in {folder.name}",
-                            "is_audio": True  # All results are audio files due to extension filtering
-                        })
-                        
+
+                        results.append(
+                            {
+                                "name": file_name,
+                                "path": file_path,
+                                "type": f"Simple Match in {folder.name}",
+                                "is_audio": True,  # All results are audio files due to extension filtering
+                            }
+                        )
+
                         debug(f"  ✅ Found match: {file_name}")
-                        
+
                         # NO ARTIFICIAL LIMIT - find ALL matching files like original patchio.py
-                            
+
             except Exception as e:
                 warning(f"  ⚠️ Cannot search in {folder}: {e}")
                 continue
-            
+
             debug(f"  📊 Folder {folder.name}: {folder_matches} matches")
-        
+
         info(f"📊 Simple search found {len(results)} matching files")
-        
+
         if len(results) == 0:
             info(f"💡 No files found matching '{query}'. Try different search terms.")
-        
+
         return results
-    
+
     def database_search(self, query: str) -> List[Dict[str, Any]]:
         """Perform search using the index database across all columns"""
         info(f"🗄️ Database Search: {query}")
-        
+
         if not os.path.exists(self.db_path):
             warning(f"⚠️ Database not found: {self.db_path}")
             return []
-        
+
         if not query.strip():
             warning("⚠️ Empty search query!")
             return []
-        
+
         # Parse search terms
         try:
-            or_terms, and_terms, not_terms, or_quoted, and_quoted, not_quoted = self._parse_bubble_query(query.strip())
+            or_terms, and_terms, not_terms, or_quoted, and_quoted, not_quoted = (
+                self._parse_bubble_query(query.strip())
+            )
             debug(f"🔍 Parsed OR terms: {list(zip(or_terms, or_quoted))}")
             debug(f"🔍 Parsed AND terms: {list(zip(and_terms, and_quoted))}")
             debug(f"🔍 Parsed NOT terms: {list(zip(not_terms, not_quoted))}")
         except Exception as e:
             error(f"⚠️ Error parsing search terms: {e}")
             return []
-        
+
         if not or_terms and not and_terms:
             warning("⚠️ No valid search terms found!")
             return []
-        
+
         results = []
-        
+
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            
+
             # Build SQL query for searching across all columns
             # Search in: path, name, vendor, library, instrument, genre, tags
             search_conditions = []
             params = []
-            
+
             # OR conditions - at least one must match
             if or_terms:
                 or_conditions = []
                 for term, quoted in zip(or_terms, or_quoted):
                     if quoted:
                         # Exact phrase match
-                        or_conditions.append("""
+                        or_conditions.append(
+                            """
                             (LOWER(path) LIKE ? OR 
                              LOWER(name) LIKE ? OR 
                              LOWER(vendor) LIKE ? OR 
@@ -273,12 +302,14 @@ class SearchModel:
                              LOWER(instrument) LIKE ? OR 
                              LOWER(genre) LIKE ? OR 
                              LOWER(tags) LIKE ?)
-                        """)
+                        """
+                        )
                         search_param = f"%{term.lower()}%"
                         params.extend([search_param] * 7)  # 7 columns
                     else:
                         # Word boundary match for unquoted terms
-                        or_conditions.append("""
+                        or_conditions.append(
+                            """
                             (LOWER(path) LIKE ? OR 
                              LOWER(name) LIKE ? OR 
                              LOWER(vendor) LIKE ? OR 
@@ -286,20 +317,22 @@ class SearchModel:
                              LOWER(instrument) LIKE ? OR 
                              LOWER(genre) LIKE ? OR 
                              LOWER(tags) LIKE ?)
-                        """)
+                        """
+                        )
                         search_param = f"%{term.lower()}%"
                         params.extend([search_param] * 7)  # 7 columns
-                
+
                 if or_conditions:
                     search_conditions.append(f"({' OR '.join(or_conditions)})")
-            
+
             # AND conditions - all must match
             if and_terms:
                 and_conditions = []
                 for term, quoted in zip(and_terms, and_quoted):
                     if quoted:
                         # Exact phrase match
-                        and_conditions.append("""
+                        and_conditions.append(
+                            """
                             (LOWER(path) LIKE ? OR 
                              LOWER(name) LIKE ? OR 
                              LOWER(vendor) LIKE ? OR 
@@ -307,12 +340,14 @@ class SearchModel:
                              LOWER(instrument) LIKE ? OR 
                              LOWER(genre) LIKE ? OR 
                              LOWER(tags) LIKE ?)
-                        """)
+                        """
+                        )
                         search_param = f"%{term.lower()}%"
                         params.extend([search_param] * 7)  # 7 columns
                     else:
                         # Word boundary match for unquoted terms
-                        and_conditions.append("""
+                        and_conditions.append(
+                            """
                             (LOWER(path) LIKE ? OR 
                              LOWER(name) LIKE ? OR 
                              LOWER(vendor) LIKE ? OR 
@@ -320,20 +355,22 @@ class SearchModel:
                              LOWER(instrument) LIKE ? OR 
                              LOWER(genre) LIKE ? OR 
                              LOWER(tags) LIKE ?)
-                        """)
+                        """
+                        )
                         search_param = f"%{term.lower()}%"
                         params.extend([search_param] * 7)  # 7 columns
-                
+
                 if and_conditions:
                     search_conditions.append(f"({' AND '.join(and_conditions)})")
-            
+
             # NOT conditions - none should match
             if not_terms:
                 not_conditions = []
                 for term, quoted in zip(not_terms, not_quoted):
                     if quoted:
                         # Exact phrase exclusion
-                        not_conditions.append("""
+                        not_conditions.append(
+                            """
                             NOT (LOWER(path) LIKE ? OR 
                                  LOWER(name) LIKE ? OR 
                                  LOWER(vendor) LIKE ? OR 
@@ -341,12 +378,14 @@ class SearchModel:
                                  LOWER(instrument) LIKE ? OR 
                                  LOWER(genre) LIKE ? OR 
                                  LOWER(tags) LIKE ?)
-                        """)
+                        """
+                        )
                         search_param = f"%{term.lower()}%"
                         params.extend([search_param] * 7)  # 7 columns
                     else:
                         # Word boundary exclusion for unquoted terms
-                        not_conditions.append("""
+                        not_conditions.append(
+                            """
                             NOT (LOWER(path) LIKE ? OR 
                                  LOWER(name) LIKE ? OR 
                                  LOWER(vendor) LIKE ? OR 
@@ -354,13 +393,14 @@ class SearchModel:
                                  LOWER(instrument) LIKE ? OR 
                                  LOWER(genre) LIKE ? OR 
                                  LOWER(tags) LIKE ?)
-                        """)
+                        """
+                        )
                         search_param = f"%{term.lower()}%"
                         params.extend([search_param] * 7)  # 7 columns
-                
+
                 if not_conditions:
                     search_conditions.append(f"({' AND '.join(not_conditions)})")
-            
+
             # Build final query
             if search_conditions:
                 where_clause = " AND ".join(search_conditions)
@@ -376,115 +416,153 @@ class SearchModel:
                     FROM files 
                     ORDER BY name
                 """
-            
+
             debug(f"🔍 Executing SQL: {sql_query}")
             debug(f"🔍 Parameters: {params}")
-            
+
             cursor.execute(sql_query, params)
             rows = cursor.fetchall()
-            
+
             for row in rows:
-                file_id, path, name, vendor, library, instrument, genre, tags, file_type = row
-                
+                (
+                    file_id,
+                    path,
+                    name,
+                    vendor,
+                    library,
+                    instrument,
+                    genre,
+                    tags,
+                    file_type,
+                ) = row
+
                 # Get file info
                 file_name = os.path.basename(path) if path else name
-                
+
                 # Create result
                 result = {
                     "id": file_id,
                     "name": file_name,
                     "path": path or "",
                     "vendor": vendor or "Unknown Vendor",
-                    "library": library or "Unknown Library", 
+                    "library": library or "Unknown Library",
                     "instrument": instrument or "",
                     "genre": genre or "",
                     "tags": tags or "",
                     "file_type": file_type or "File",
                     "type": f"Database Match",
-                    "is_audio": True
+                    "is_audio": True,
                 }
-                
+
                 results.append(result)
                 debug(f"  ✅ Found match: {file_name}")
-            
+
             conn.close()
-            
+
         except Exception as e:
             error(f"⚠️ Database search error: {e}")
             return []
-        
+
         info(f"📊 Database search found {len(results)} matching files")
-        
+
         if len(results) == 0:
-            info(f"💡 No files found matching '{query}' in database. Try different search terms.")
-        
+            info(
+                f"💡 No files found matching '{query}' in database. Try different search terms."
+            )
+
         return results
-    
+
     def ai_search(self, query: str) -> List[Dict[str, Any]]:
         """AI-powered search (placeholder for now)"""
         info(f"🤖 AI Search: {query}")
-        
+
         # TODO: Later integrate with patchio.py AI functions
         # For now, return mock results to test UI
         return [
-            {"name": f"AI: Epic Drums for '{query}'", "path": "/path/to/epic_drums.wav", "type": "AI Result"},
-            {"name": f"AI: Cinematic Strings matching '{query}'", "path": "/path/to/strings.wav", "type": "AI Result"},
-            {"name": f"AI: Dark Bass inspired by '{query}'", "path": "/path/to/bass.wav", "type": "AI Result"},
+            {
+                "name": f"AI: Epic Drums for '{query}'",
+                "path": "/path/to/epic_drums.wav",
+                "type": "AI Result",
+            },
+            {
+                "name": f"AI: Cinematic Strings matching '{query}'",
+                "path": "/path/to/strings.wav",
+                "type": "AI Result",
+            },
+            {
+                "name": f"AI: Dark Bass inspired by '{query}'",
+                "path": "/path/to/bass.wav",
+                "type": "AI Result",
+            },
         ]
-    
+
     def advanced_search(self, query: str) -> List[Dict[str, Any]]:
         """Advanced search with filters"""
         info(f"⚙️ Advanced Search: {query}")
-        
+
         # TODO: Later integrate with patchio.py advanced search
         # For now, return mock results to test UI
         return [
-            {"name": f"Advanced: Complex Pattern for '{query}'", "path": "/path/to/pattern.wav", "type": "Advanced Result"},
-            {"name": f"Advanced: Filtered Sound matching '{query}'", "path": "/path/to/filtered.wav", "type": "Advanced Result"},
+            {
+                "name": f"Advanced: Complex Pattern for '{query}'",
+                "path": "/path/to/pattern.wav",
+                "type": "Advanced Result",
+            },
+            {
+                "name": f"Advanced: Filtered Sound matching '{query}'",
+                "path": "/path/to/filtered.wav",
+                "type": "Advanced Result",
+            },
         ]
-    
+
     def get_matched_keywords(self, file_path: str, search_terms: str) -> List[str]:
         """Get the search terms that matched this specific file"""
         if not search_terms:
             return []
-        
+
         # Parse the search terms with operators
-        or_terms, and_terms, not_terms, or_quoted, and_quoted, not_quoted = self._parse_bubble_query(search_terms)
+        or_terms, and_terms, not_terms, or_quoted, and_quoted, not_quoted = (
+            self._parse_bubble_query(search_terms)
+        )
         matched_terms = []
-        
+
         # Get the file name and path for matching
         file_name = os.path.basename(file_path).lower()
         file_path_lower = file_path.lower()
-        
+
         # Check which OR terms matched this file
         for term, quoted in zip(or_terms, or_quoted):
-            if self._matches_term(term, file_name, quoted) or self._matches_term(term, file_path_lower, quoted):
+            if self._matches_term(term, file_name, quoted) or self._matches_term(
+                term, file_path_lower, quoted
+            ):
                 matched_terms.append(term.lower())
-        
+
         # Check which AND terms matched this file
         for term, quoted in zip(and_terms, and_quoted):
-            if self._matches_term(term, file_name, quoted) or self._matches_term(term, file_path_lower, quoted):
+            if self._matches_term(term, file_name, quoted) or self._matches_term(
+                term, file_path_lower, quoted
+            ):
                 matched_terms.append(term.lower())
-        
+
         # Note: NOT terms are not included in matched keywords since they exclude files
-        
+
         return matched_terms
-    
+
     def get_genre_keywords(self, file_path: str) -> List[str]:
         """Extract genre keywords from file path using settings"""
         file_name = os.path.basename(file_path).lower()
         path_lower = file_path.lower()
-        combined_text = (file_name + ' ' + path_lower).lower()
-        
+        combined_text = (file_name + " " + path_lower).lower()
+
         genre_keywords = []
-        
+
         # Use settings for genre keywords
         for category, keywords in GENRE_KEYWORDS.items():
             if any(word in combined_text for word in keywords):
                 genre_keywords.append(category)
-        
+
         return genre_keywords
-    
+
     def _parse_terms(self, input_str: str) -> Tuple[List[str], List[bool]]:
         """
         Parse the input string into terms and detect which were quoted.
@@ -502,8 +580,10 @@ class SearchModel:
                 terms.append(unquoted)
                 quoted_flags.append(False)
         return terms, quoted_flags
-    
-    def _parse_bubble_query(self, input_str: str) -> Tuple[List[str], List[str], List[str], List[bool], List[bool], List[bool]]:
+
+    def _parse_bubble_query(
+        self, input_str: str
+    ) -> Tuple[List[str], List[str], List[str], List[bool], List[bool], List[bool]]:
         """
         Parse bubble query text into OR/AND/NOT terms with quoted flags.
         Returns (or_terms, and_terms, not_terms, or_quoted, and_quoted, not_quoted)
@@ -514,19 +594,19 @@ class SearchModel:
         or_quoted = []
         and_quoted = []
         not_quoted = []
-        
+
         # Split the query into parts (bubbles and operators)
         pattern = r'"([^"]+)"|(\S+)'
         matches = re.findall(pattern, input_str)
-        
+
         current_operator = "OR"  # Default operator
         current_terms = or_terms
         current_quoted = or_quoted
-        
+
         for quoted, unquoted in matches:
             term = quoted if quoted else unquoted
             is_quoted = bool(quoted)
-            
+
             # Check if this is an operator
             if term.upper() in ["OR", "AND", "NOT"]:
                 current_operator = term.upper()
@@ -544,9 +624,9 @@ class SearchModel:
                 # This is a search term, add it to current operator's list
                 current_terms.append(term)
                 current_quoted.append(is_quoted)
-        
+
         return or_terms, and_terms, not_terms, or_quoted, and_quoted, not_quoted
-    
+
     def _matches_term(self, term: str, text: str, quoted: bool) -> bool:
         """
         Check if term matches text, handling quoted vs unquoted matching
@@ -555,34 +635,46 @@ class SearchModel:
         text = text.lower()
 
         if quoted:
-            if ' ' in term:
+            if " " in term:
                 return term in text
             else:
                 # Match whole word or surrounded by non-alphanumeric characters
-                pattern = r'(?:^|[^a-zA-Z0-9])' + re.escape(term) + r'(?:[^a-zA-Z0-9]|$)'
+                pattern = (
+                    r"(?:^|[^a-zA-Z0-9])" + re.escape(term) + r"(?:[^a-zA-Z0-9]|$)"
+                )
                 return re.search(pattern, text) is not None
         else:
             return term in text
-    
-    def _recursive_scan(self, folder: str, selected_extensions: List[str], excluded_folders: List[str] = None) -> List[str]:
+
+    def _recursive_scan(
+        self,
+        folder: str,
+        selected_extensions: List[str],
+        excluded_folders: List[str] = None,
+    ) -> List[str]:
         """
         Recursively scan folder for files with selected extensions
         """
         if excluded_folders is None:
             excluded_folders = []
-        
+
         selected_extensions_lower = tuple(ext.lower() for ext in selected_extensions)
-        
+
         try:
             for entry in os.scandir(folder):
                 entry_path = os.path.normcase(os.path.abspath(entry.path))
 
                 if entry.is_dir(follow_symlinks=False):
                     # Skip excluded folders
-                    if any(entry_path == ex or entry_path.startswith(ex + os.sep) for ex in excluded_folders):
+                    if any(
+                        entry_path == ex or entry_path.startswith(ex + os.sep)
+                        for ex in excluded_folders
+                    ):
                         continue
-                    
-                    yield from self._recursive_scan(entry.path, selected_extensions, excluded_folders)
+
+                    yield from self._recursive_scan(
+                        entry.path, selected_extensions, excluded_folders
+                    )
 
                 elif entry.is_file(follow_symlinks=False):
                     if entry.name.lower().endswith(selected_extensions_lower):
@@ -591,4 +683,4 @@ class SearchModel:
         except PermissionError as e:
             error(f"PermissionError accessing '{folder}': {e}")
         except Exception as e:
-            error(f"Unexpected error accessing '{folder}': {e}") 
+            error(f"Unexpected error accessing '{folder}': {e}")
