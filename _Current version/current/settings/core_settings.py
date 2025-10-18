@@ -5,19 +5,6 @@ Centralized configuration for easy editing and future JSON integration.
 """
 
 # ============================================================================
-# # Elasticsearch Configuration
-# ============================================================================
-ELASTICSEARCH_ENABLED = True
-ELASTICSEARCH_HOST = "localhost"
-ELASTICSEARCH_PORT = 9200
-ELASTICSEARCH_TIMEOUT = 30
-
-# Search Configuration
-USE_ELASTICSEARCH = True  # Set to False to disable ES entirely
-ELASTICSEARCH_FUZZY_SEARCH = True
-ELASTICSEARCH_SEARCH_WEIGHTS = True
-
-# ============================================================================
 # APP CONFIGURATION
 # ============================================================================
 
@@ -69,12 +56,9 @@ DEFAULT_EXTENSIONS = [
 ]
 
 DEFAULT_SEARCH_FOLDERS = [
-    "/Volumes/Samsung 850 EVO",
-    "/Users/shaked/Desktop/Samples",
-    "/Users/shaked/Music",
-    "C:\\Users\\amhae\\Music\\beats",
     "/home/elvis/Music",
 ]
+# /home/elvis/.config/PatchIO
 
 # ============================================================================
 # UI CONFIGURATION
@@ -285,3 +269,19 @@ FILE_ICON_MAPPINGS = {
     ".rar": "📦",
     ".7z": "📦",
 }
+
+# ============================================================================
+# ELASTICSEARCH CONFIGURATION
+# ============================================================================
+
+# Elasticsearch configuration
+ELASTICSEARCH_ENABLED = True
+ELASTICSEARCH_HOSTS = ["http://localhost:9200"]
+ELASTICSEARCH_USERNAME = None
+ELASTICSEARCH_PASSWORD = None
+ELASTICSEARCH_SSL_VERIFY = False
+ELASTICSEARCH_INDEX = "patchio_files"
+ELASTICSEARCH_AUTOCOMPLETE_MIN_CHARS = 2
+ELASTICSEARCH_BULK_SIZE = 2000
+ELASTICSEARCH_BULK_CONCURRENCY = 2
+ELASTICSEARCH_MAX_RESULTS = 1000
