@@ -8,6 +8,7 @@ from PySide6.QtWidgets import QLineEdit, QHBoxLayout, QWidget, QLabel, QVBoxLayo
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QFont, QPainter, QColor, QPen
 import re
+from utils.logger import debug, info, warning, error, critical
 
 class ORLabel(QLabel):
     """Beautiful clickable operator label between bubbles"""
@@ -89,7 +90,7 @@ class ORLabel(QLabel):
             }}
         """)
         
-        print(f"🔍 Operator changed to: {new_operator}")
+        debug(f"🔍 Operator changed to: {new_operator}")
     
     def get_current_operator(self):
         """Get the current operator text"""
@@ -309,7 +310,7 @@ class BubbleSearchInput(QWidget):
             return False  # Let the event continue to normal handling
         
         elif event.type() == QEvent.Type.KeyPress:
-            print(f"🔍 KeyPress event: key={event.key()}, obj={obj}, bubbles={len(self.bubbles) if self.bubbles else 0}")
+            debug(f"🔍 KeyPress event: key={event.key()}, obj={obj}, bubbles={len(self.bubbles) if self.bubbles else 0}")
             
             # Check if we can add more bubbles (space is full)
             if self.bubbles and not self.can_add_bubble():
@@ -318,11 +319,11 @@ class BubbleSearchInput(QWidget):
                     # Allow backspace to remove bubbles
                     selected_bubble = self.get_selected_bubble()
                     if selected_bubble:
-                        print(f"🔍 Backspace - removing selected bubble: '{selected_bubble.text}'")
+                        debug(f"🔍 Backspace - removing selected bubble: '{selected_bubble.text}'")
                         self.remove_bubble(selected_bubble)
                         return True
                     elif len(self.line_edit.text()) == 0:
-                        print(f"🔍 Backspace - removing last bubble")
+                        debug(f"🔍 Backspace - removing last bubble")
                         self.remove_last_bubble()
                         return True
                     else:
@@ -330,7 +331,7 @@ class BubbleSearchInput(QWidget):
                         return False  # Let normal backspace handle it
                 elif event.text() and event.text().isprintable():
                     # Block only printable characters (text input) when space is full
-                    print(f"🔍 Blocking text input: '{event.text()}' - space is full")
+                    debug(f"🔍 Blocking text input: '{event.text()}' - space is full")
                     return True  # Block the event
                 else:
                     # Allow all non-printable keys (function keys, modifiers, etc.)
@@ -345,38 +346,38 @@ class BubbleSearchInput(QWidget):
                 if self.line_edit.text().strip():
                     self.textToFilterBubble.emit(self.line_edit.text().strip())
                     # Don't emit returnPressed signal when converting text to bubbles
-                    print(f"🔍 Converting text to filter bubble, not starting search")
+                    info(f"🔍 Converting text to filter bubble, not starting search")
                     return True
                 # If no text and no bubbles, don't start search
                 elif not self.bubbles:
-                    print(f"🔍 No text and no bubbles - not starting search")
+                    info(f"🔍 No text and no bubbles - not starting search")
                     return True
                 # If no text but there are bubbles, start the search
                 else:
-                    print(f"🔍 No text but bubbles exist - starting search")
+                    info(f"🔍 No text but bubbles exist - starting search")
                     self.returnPressed.emit()
                     return True
             elif event.key() == Qt.Key.Key_Backspace:
-                print(f"🔍 Backspace detected! Bubbles: {len(self.bubbles)}, Text: '{self.line_edit.text()}'")
+                debug(f"🔍 Backspace detected! Bubbles: {len(self.bubbles)}, Text: '{self.line_edit.text()}'")
                 # Handle backspace to remove selected bubble or last bubble
                 if self.bubbles:
                     # Check if any bubble is selected
                     selected_bubble = self.get_selected_bubble()
                     if selected_bubble:
-                        print(f"🔍 Backspace - removing selected bubble: '{selected_bubble.text}'")
+                        debug(f"🔍 Backspace - removing selected bubble: '{selected_bubble.text}'")
                         self.remove_bubble(selected_bubble)
                         return True
                     elif len(self.line_edit.text()) == 0:
                         # Only remove last bubble if no text and no selection
-                        print(f"🔍 Backspace - removing last bubble")
+                        debug(f"🔍 Backspace - removing last bubble")
                         self.remove_last_bubble()
                         return True
                     else:
-                        print(f"🔍 Backspace in bubble mode but text not empty: '{self.line_edit.text()}'")
+                        debug(f"🔍 Backspace in bubble mode but text not empty: '{self.line_edit.text()}'")
                 else:
-                    print(f"🔍 Backspace but no bubbles to remove")
+                    debug(f"🔍 Backspace but no bubbles to remove")
             else:
-                print(f"🔍 Other key: {event.key()} (Backspace should be {Qt.Key.Key_Backspace})")
+                debug(f"🔍 Other key: {event.key()} (Backspace should be {Qt.Key.Key_Backspace})")
                 # Clear bubble selections when user starts typing
                 if self.bubbles:
                     self.clear_selections()
@@ -385,7 +386,7 @@ class BubbleSearchInput(QWidget):
     
     def on_line_edit_key_press(self, event):
         """Handle key press events directly on the line edit"""
-        print(f"🔍 Direct KeyPress: key={event.key()}, bubbles={len(self.bubbles) if self.bubbles else 0}")
+        debug(f"🔍 Direct KeyPress: key={event.key()}, bubbles={len(self.bubbles) if self.bubbles else 0}")
         
         # Check if we can add more bubbles (space is full)
         if self.bubbles and not self.can_add_bubble():
@@ -394,11 +395,11 @@ class BubbleSearchInput(QWidget):
                 # Allow backspace to remove bubbles
                 selected_bubble = self.get_selected_bubble()
                 if selected_bubble:
-                    print(f"🔍 Direct Backspace - removing selected bubble: '{selected_bubble.text}'")
+                    debug(f"🔍 Direct Backspace - removing selected bubble: '{selected_bubble.text}'")
                     self.remove_bubble(selected_bubble)
                     return  # Don't call parent
                 elif len(self.line_edit.text()) == 0:
-                    print(f"🔍 Direct Backspace - removing last bubble")
+                    debug(f"🔍 Direct Backspace - removing last bubble")
                     self.remove_last_bubble()
                     return  # Don't call parent
                 else:
@@ -407,7 +408,7 @@ class BubbleSearchInput(QWidget):
                     return
             elif event.text() and event.text().isprintable():
                 # Block only printable characters (text input) when space is full
-                print(f"🔍 Direct Blocking text input: '{event.text()}' - space is full")
+                debug(f"🔍 Direct Blocking text input: '{event.text()}' - space is full")
                 return  # Block the event
             else:
                 # Allow all non-printable keys (function keys, modifiers, etc.)
@@ -423,33 +424,33 @@ class BubbleSearchInput(QWidget):
             if self.line_edit.text().strip():
                 self.textToFilterBubble.emit(self.line_edit.text().strip())
                 # Don't emit returnPressed signal when converting text to bubbles
-                print(f"🔍 Direct Converting text to filter bubble, not starting search")
+                info(f"🔍 Direct Converting text to filter bubble, not starting search")
                 return  # Don't call parent
             # If no text and no bubbles, don't start search
             elif not self.bubbles:
-                print(f"🔍 Direct No text and no bubbles - not starting search")
+                info(f"🔍 Direct No text and no bubbles - not starting search")
                 return  # Don't call parent
             # If no text but there are bubbles, start the search
             else:
-                print(f"🔍 Direct No text but bubbles exist - starting search")
+                info(f"🔍 Direct No text but bubbles exist - starting search")
                 self.returnPressed.emit()
                 return  # Don't call parent
         elif event.key() == Qt.Key.Key_Backspace:
-            print(f"🔍 Direct Backspace detected!")
+            debug(f"🔍 Direct Backspace detected!")
             if self.bubbles:
                 selected_bubble = self.get_selected_bubble()
                 if selected_bubble:
-                    print(f"🔍 Direct Backspace - removing selected bubble: '{selected_bubble.text}'")
+                    debug(f"🔍 Direct Backspace - removing selected bubble: '{selected_bubble.text}'")
                     self.remove_bubble(selected_bubble)
                     return  # Don't call parent
                 elif len(self.line_edit.text()) == 0:
-                    print(f"🔍 Direct Backspace - removing last bubble")
+                    debug(f"🔍 Direct Backspace - removing last bubble")
                     self.remove_last_bubble()
                     return  # Don't call parent
                 else:
-                    print(f"🔍 Direct Backspace - letting normal behavior handle text")
+                    debug(f"🔍 Direct Backspace - letting normal behavior handle text")
         else:
-            print(f"🔍 Direct Other key: {event.key()} (Backspace should be {Qt.Key.Key_Backspace})")
+            debug(f"🔍 Direct Other key: {event.key()} (Backspace should be {Qt.Key.Key_Backspace})")
             # Clear bubble selections when user starts typing
             if self.bubbles:
                 self.clear_selections()
@@ -467,18 +468,18 @@ class BubbleSearchInput(QWidget):
         if not self.bubbles:
             self.original_text = text
             self.textChanged.emit(text)
-            print(f"🔍 Emitted normal text: '{text}'")
+            debug(f"🔍 Emitted normal text: '{text}'")
         else:
             # When in bubble mode, emit the bubble text
             bubble_text = " ".join([f'"{bubble.text}"' for bubble in self.bubbles])
             self.textChanged.emit(bubble_text)
-            print(f"🔍 Emitted bubble text: '{bubble_text}'")
+            debug(f"🔍 Emitted bubble text: '{bubble_text}'")
     
     def convert_to_bubbles(self):
         """Convert current text to bubbles - DISABLED"""
         # DISABLED: Blue search bubbles functionality is disabled
         # Text is now converted to filter bubbles instead
-        print(f"🔍 Blue search bubbles conversion disabled - using filter bubbles instead")
+        debug(f"🔍 Blue search bubbles conversion disabled - using filter bubbles instead")
         return
     
     def can_add_bubble(self):
@@ -502,7 +503,7 @@ class BubbleSearchInput(QWidget):
         can_add = (current_bubble_width + min_line_edit_space) < INITIAL_WINDOW_WIDTH - 24 # 24px is padding
         
         # Debug output
-        print(f"🔍 Space check: initial_width={INITIAL_WINDOW_WIDTH}, current_bubbles={current_bubble_width}, min_line_space={min_line_edit_space}, can_add={can_add}")
+        debug(f"🔍 Space check: initial_width={INITIAL_WINDOW_WIDTH}, current_bubbles={current_bubble_width}, min_line_space={min_line_edit_space}, can_add={can_add}")
         
         return can_add
     
@@ -544,7 +545,7 @@ class BubbleSearchInput(QWidget):
         """Convert any free text in the line edit to bubbles - DISABLED"""
         # DISABLED: Blue search bubbles functionality is disabled
         # Text is now converted to filter bubbles instead
-        print(f"🔍 Blue search bubbles conversion disabled - using filter bubbles instead")
+        debug(f"🔍 Blue search bubbles conversion disabled - using filter bubbles instead")
         return
     
     def get_selected_bubble(self):
@@ -561,7 +562,7 @@ class BubbleSearchInput(QWidget):
     
     def on_bubble_selection_changed(self, selected_bubble):
         """Handle bubble selection changes"""
-        print(f"🔍 Bubble selection changed: '{selected_bubble.text}' selected={selected_bubble.is_selected}")
+        debug(f"🔍 Bubble selection changed: '{selected_bubble.text}' selected={selected_bubble.is_selected}")
         # Clear other selections when one is selected
         for bubble in self.bubbles:
             if bubble != selected_bubble:
@@ -617,7 +618,7 @@ class BubbleSearchInput(QWidget):
                 # Convert any remaining OR labels to "OR" since there's only one bubble left
                 for or_label in self.or_labels:
                     or_label.set_text("OR")
-                print("🔍 Auto-converted to OR: only one bubble remaining")
+                debug("🔍 Auto-converted to OR: only one bubble remaining")
             
             # Reset line edit style if space is now available
             if self.can_add_bubble():
@@ -661,7 +662,7 @@ class BubbleSearchInput(QWidget):
             # Convert any remaining OR labels to "OR" since there's only one bubble left
             for or_label in self.or_labels:
                 or_label.set_text("OR")
-            print("🔍 Auto-converted to OR: only one bubble remaining")
+            debug("🔍 Auto-converted to OR: only one bubble remaining")
         
         # Reset line edit style if space is now available
         if self.can_add_bubble():
@@ -695,7 +696,7 @@ class BubbleSearchInput(QWidget):
     def get_text(self):
         """Get current text from the stored search text"""
         # Return the stored search text that was saved when user typed
-        print(f"🔍 get_text() returning stored search text: '{self.current_search_text}'")
+        debug(f"🔍 get_text() returning stored search text: '{self.current_search_text}'")
         return self.current_search_text
     
     def set_text(self, text):

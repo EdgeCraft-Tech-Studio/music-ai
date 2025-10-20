@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 from datetime import datetime
 import appdirs
+from utils.logger import debug, info, warning, error, critical
 
 # Setup logging to user config dir
 config_dir = appdirs.user_config_dir("PatchIO", "PatchIO")
@@ -18,7 +19,7 @@ def log(msg):
     full_msg = f"{timestamp} {msg}"
     with open(UPDATER_LOG_FILE, "a") as f:
         f.write(full_msg + "\n")
-    print(full_msg)
+    debug(full_msg)
 
 def wait_for_app_to_close(app_path):
     while os.path.exists(app_path + "/Contents/MacOS/PatchIO"):

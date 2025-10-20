@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Set, Any
 from dataclasses import dataclass
 from collections import defaultdict
+from utils.logger import debug, info, warning, error, critical
 
 @dataclass
 class TagResult:
@@ -62,7 +63,7 @@ class AutomaticTagger:
             self._load_tag_mappings()
             
         except Exception as e:
-            print(f"❌ Error initializing tag database: {e}")
+            error(f"❌ Error initializing tag database: {e}")
             raise
     
     def _populate_default_mappings(self):
@@ -73,7 +74,7 @@ class AutomaticTagger:
             if self.cursor.fetchone()[0] > 0:
                 return
             
-            print("📝 Populating default tag mappings...")
+            debug("📝 Populating default tag mappings...")
             
             # Default instrument mappings
             instrument_mappings = [
@@ -289,10 +290,10 @@ class AutomaticTagger:
             ''', all_mappings)
             
             self.conn.commit()
-            print(f"✅ Populated {len(all_mappings)} default tag mappings")
+            debug(f"✅ Populated {len(all_mappings)} default tag mappings")
             
         except Exception as e:
-            print(f"❌ Error populating default mappings: {e}")
+            error(f"❌ Error populating default mappings: {e}")
             raise
     
     def _load_tag_mappings(self):
@@ -327,10 +328,10 @@ class AutomaticTagger:
                                 })
             
             total_mappings = sum(len(mappings) for mappings in self.tag_mappings.values())
-            print(f"📚 Loaded {total_mappings} tag mappings into memory")
+            debug(f"📚 Loaded {total_mappings} tag mappings into memory")
             
         except Exception as e:
-            print(f"❌ Error loading tag mappings: {e}")
+            error(f"❌ Error loading tag mappings: {e}")
             self.tag_mappings = defaultdict(list)
     
     def _parse_tag_value(self, value):
@@ -638,7 +639,7 @@ class AutomaticTagger:
             return final_result
             
         except Exception as e:
-            print(f"⚠️ Error tagging file {file_path}: {e}")
+            error(f"⚠️ Error tagging file {file_path}: {e}")
             return TagResult(source="error", confidence=0.0)
     
     def add_tag_mapping(self, pattern: str, tag_type: str, tag_value: str, 
@@ -659,14 +660,14 @@ class AutomaticTagger:
                 if success:
                     # Reload mappings to include the new one
                     self._load_tag_mappings()
-                    print(f"✅ Added tag mapping: {pattern} → {tag_type}:{tag_value}")
+                    debug(f"✅ Added tag mapping: {pattern} → {tag_type}:{tag_value}")
                 return success
             else:
-                print("❌ Knowledge database not available")
+                error("❌ Knowledge database not available")
                 return False
             
         except Exception as e:
-            print(f"❌ Error adding tag mapping: {e}")
+            error(f"❌ Error adding tag mapping: {e}")
             return False
     
     def get_tag_statistics(self) -> Dict[str, Any]:
@@ -685,7 +686,7 @@ class AutomaticTagger:
             return stats
             
         except Exception as e:
-            print(f"❌ Error getting tag statistics: {e}")
+            error(f"❌ Error getting tag statistics: {e}")
             return {}
     
     def close(self):
@@ -733,8 +734,8 @@ def test_automatic_tagger():
         }
     ]
     
-    print("🧪 Testing Automatic Tagging System")
-    print("=" * 60)
+    debug("🧪 Testing Automatic Tagging System")
+    debug("=" * 60)
     
     tagger = AutomaticTagger()
     
@@ -745,21 +746,21 @@ def test_automatic_tagger():
             test_file["vendor"]
         )
         
-        print(f"File: {Path(test_file['path']).name}")
-        print(f"  Library: {test_file['library']}")
-        print(f"  Instrument: {result.instrument}")
-        print(f"  Genre: {result.genre}")
-        print(f"  Mood: {result.mood}")
-        print(f"  Format: {result.format}")
-        print(f"  Confidence: {result.confidence:.2f}")
-        print(f"  Source: {result.source}")
-        print()
+        debug(f"File: {Path(test_file['path']).name}")
+        debug(f"  Library: {test_file['library']}")
+        debug(f"  Instrument: {result.instrument}")
+        debug(f"  Genre: {result.genre}")
+        debug(f"  Mood: {result.mood}")
+        debug(f"  Format: {result.format}")
+        debug(f"  Confidence: {result.confidence:.2f}")
+        debug(f"  Source: {result.source}")
+        debug()
     
     # Show statistics
     stats = tagger.get_tag_statistics()
-    print("📊 Tag Mapping Statistics:")
+    debug("📊 Tag Mapping Statistics:")
     for key, value in stats.items():
-        print(f"  {key}: {value}")
+        debug(f"  {key}: {value}")
     
     tagger.close()
 

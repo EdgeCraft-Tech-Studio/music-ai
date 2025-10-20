@@ -8,7 +8,7 @@ import sys
 import os
 import sqlite3
 from typing import Dict, Optional, List
-from PySide6.QtWidgets import QApplication, QPushButton, QFrame, QCheckBox, QWidget, QVBoxLayout, QHBoxLayout, QSizePolicy, QSpacerItem, QLabel
+from PySide6.QtWidgets import QApplication, QPushButton, QFrame, QCheckBox, QWidget, QVBoxLayout, QHBoxLayout, QSizePolicy, QSpacerItem, QLabel, QDialog
 from PySide6.QtCore import QTimer, QObject, Qt, QThread, Signal
 from PySide6.QtGui import QPainter, QColor, QPen, QFont
 
@@ -20,6 +20,7 @@ from models.search_model import SearchModel
 from models.file_model import FileModel
 from views.main_window import MainWindowView
 from controllers.search_controller import SearchController
+from utils.logger import debug, info, warning, error, critical
 
 # Import FileEvent for type hints
 try:
@@ -47,9 +48,9 @@ class BackgroundVendorExtractionWorker(QThread):
         self.should_stop = True
     
     def run(self):
-        """Run vendor extraction in background - SMART approach: process by library folders"""
+        """🚀 OPTIMIZED vendor extraction - batch processing with original logic"""
         try:
-            self.extraction_progress.emit("🔍 Extracting vendor/library information...")
+            self.extraction_progress.emit("🔍 Starting optimized vendor extraction...")
             
             # Get unique library folders with unknown vendor/library
             conn = sqlite3.connect(self.db_path)
@@ -73,66 +74,137 @@ class BackgroundVendorExtractionWorker(QThread):
                 self.extraction_completed.emit({'files_processed': 0, 'files_updated': 0})
                 return
             
-            self.extraction_progress.emit(f"🔍 Found {len(library_folders)} unique library folders to process...")
+            self.extraction_progress.emit(f"🔍 Found {len(library_folders)} library folders to process...")
             
-            # Process each library folder
-            folders_processed = 0
+            # 🚀 OPTIMIZED BATCH PROCESSING: Process folders in batches with original logic
+            batch_size = 500  # Process 500 folders per batch (larger batches for maximum speed)
             total_files_updated = 0
+            folders_processed = 0
             
-            for library_folder, sample_file in library_folders:
+            # Initialize knowledge database once for all batches
+            knowledge_db = self._get_knowledge_database()
+            
+            for batch_start in range(0, len(library_folders), batch_size):
                 if self.should_stop:
                     return
                 
-                # Extract vendor/library for this library folder
-                vendor, library = self._extract_vendor_library_for_folder(sample_file)
+                batch_end = min(batch_start + batch_size, len(library_folders))
+                batch_folders = library_folders[batch_start:batch_end]
                 
-                if vendor != 'Unknown Vendor' or library != 'Unknown Library':
-                    # Update ALL files in this library folder with the same vendor/library
-                    files_updated = self._update_folder_files(library_folder, vendor, library)
-                    total_files_updated += files_updated
+                # Process batch using original comprehensive method
+                batch_updates = self._process_batch_optimized(batch_folders, knowledge_db)
+                total_files_updated += batch_updates
+                folders_processed += len(batch_folders)
                 
-                folders_processed += 1
-                
-                if folders_processed % 50 == 0:  # Progress every 50 folders
-                    self.extraction_progress.emit(f"🔍 Processed {folders_processed}/{len(library_folders)} library folders...")
+                # Progress update
+                self.extraction_progress.emit(f"🔍 Processed {folders_processed}/{len(library_folders)} folders ({batch_updates} files updated in this batch)")
             
-            self.extraction_progress.emit(f"✅ Vendor extraction completed: {total_files_updated} files updated across {folders_processed} library folders")
+            self.extraction_progress.emit(f"✅ Optimized extraction completed: {total_files_updated} files updated across {folders_processed} library folders")
             self.extraction_completed.emit({'files_processed': folders_processed, 'files_updated': total_files_updated})
             
         except Exception as e:
             self.extraction_progress.emit(f"❌ Vendor extraction failed: {e}")
     
-    def _extract_vendor_library_for_folder(self, sample_file_path: str):
-        """Extract vendor/library for a library folder using comprehensive method"""
+    def _get_knowledge_database(self):
+        """
+        Get knowledge database instance (cached).
+        Uses centralized AppDirs path from KnowledgeDatabase.get_default_db_path().
+        """
         try:
-            # First try the Knowledge Database (most accurate)
             from utils.database.knowledge_database import KnowledgeDatabase
-            import appdirs
-            from settings.core_settings import APP_NAME, APP_AUTHOR
             
-            # Get knowledge database
-            config_dir = appdirs.user_config_dir(APP_NAME, APP_AUTHOR)
-            knowledge_db_path = os.path.join(config_dir, 'patchio_knowledge.db')
+            # KnowledgeDatabase() automatically uses AppDirs location (single source of truth)
+            # Will create DB if it doesn't exist
+            return KnowledgeDatabase()
+        except Exception as e:
+            error(f"❌ Error getting knowledge database: {e}")
+            return None
+    
+    def _process_batch_optimized(self, batch_folders, knowledge_db):
+        """🚀 OPTIMIZED batch processing - extract vendor/library using original comprehensive logic"""
+        try:
+            # Prepare batch data structures
+            folder_updates = {}  # library_folder -> (vendor, library)
             
-            if os.path.exists(knowledge_db_path):
-                knowledge_db = KnowledgeDatabase(knowledge_db_path)
-                vendor, library = knowledge_db.extract_vendor_library(sample_file_path)
+            # 🚀 PHASE 1: Extract vendor/library for all folders in batch using original logic
+            for library_folder, sample_file in batch_folders:
+                if self.should_stop:
+                    return 0
                 
-                # If Knowledge Database found anything, use it (even if only vendor or only library)
+                # Use optimized extraction method with shared knowledge database
+                vendor, library = self._extract_vendor_library_for_folder(sample_file, knowledge_db)
+                
                 if vendor != 'Unknown Vendor' or library != 'Unknown Library':
-                    return vendor, library
+                    folder_updates[library_folder] = (vendor, library)
             
-            # If Knowledge Database didn't work, try the fast rule-based method
-            vendor, library = self._fast_extract_vendor_library(sample_file_path)
+            if not folder_updates:
+                return 0  # No updates needed
             
-            # If fast method found anything, use it (even if only vendor or only library)
-            if vendor != 'Unknown Vendor' or library != 'Unknown Library':
-                return vendor, library
-            
-            return 'Unknown Vendor', 'Unknown Library'
+            # 🚀 PHASE 2: Batch update database (single transaction)
+            return self._batch_update_database(folder_updates)
             
         except Exception as e:
-            print(f"❌ Error extracting vendor/library for folder: {e}")
+            error(f"❌ Error in optimized batch processing: {e}")
+            return 0
+    
+    
+    def _batch_update_database(self, folder_updates):
+        """🚀 ULTRA-FAST batch database update - single transaction for all updates"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            total_updated = 0
+            
+            # Prepare batch update data
+            update_data = []
+            for library_folder, (vendor, library) in folder_updates.items():
+                update_data.append((vendor, library, library_folder))
+            
+            # Execute batch updates
+            for vendor, library, library_folder in update_data:
+                cursor.execute("""
+                    UPDATE files 
+                    SET vendor = CASE 
+                        WHEN vendor = 'Unknown Vendor' THEN ? 
+                        ELSE vendor 
+                    END,
+                    library = CASE 
+                        WHEN library = 'Unknown Library' THEN ? 
+                        ELSE library 
+                    END
+                    WHERE path LIKE ? AND (vendor = 'Unknown Vendor' OR library = 'Unknown Library')
+                """, (vendor, library, f"{library_folder}%"))
+                
+                total_updated += cursor.rowcount
+            
+            conn.commit()
+            conn.close()
+            
+            return total_updated
+            
+        except Exception as e:
+            error(f"❌ Error in batch database update: {e}")
+            return 0
+    
+    def _extract_vendor_library_for_folder(self, sample_file_path: str, knowledge_db=None):
+        """
+        🚀 NEW: Using LibraryExtractorV3 (fast pattern-based extraction)
+        Replaces old knowledge_db.extract_vendor_library() (slow method)
+        """
+        try:
+            # 🚀 NEW: Use V3 extractor (fast, accurate, thread-safe)
+            from utils.database.library_extractor_v3 import LibraryExtractorV3
+            
+            # Create or reuse V3 extractor (uses shared vendor cache)
+            if not hasattr(self, '_v3_extractor'):
+                self._v3_extractor = LibraryExtractorV3(use_knowledge_db=True)
+            
+            vendor, library, project = self._v3_extractor.extract_vendor_library(sample_file_path)
+            return vendor, library
+            
+        except Exception as e:
+            error(f"❌ Error extracting vendor/library for folder: {e}")
             return 'Unknown Vendor', 'Unknown Library'
     
     def _update_folder_files(self, library_folder: str, vendor: str, library: str):
@@ -163,7 +235,7 @@ class BackgroundVendorExtractionWorker(QThread):
             return files_updated
             
         except Exception as e:
-            print(f"❌ Error updating folder files: {e}")
+            error(f"❌ Error updating folder files: {e}")
             return 0
     
     def _fast_extract_vendor_library(self, file_path: str):
@@ -342,7 +414,7 @@ class BackgroundSyncWorker(QThread):
             self.sync_failed.emit(str(e))
         finally:
             # Ensure the thread properly finishes
-            print("🧵 BackgroundSyncWorker thread finishing...")
+            debug("🧵 BackgroundSyncWorker thread finishing...")
 
 class MaterialCheckBox(QCheckBox):
     """Material Design style checkbox with proper tick mark"""
@@ -528,7 +600,7 @@ class FloatingDropdown(QWidget):
         # Connect checkbox changes to parent controller
         self.on_checkbox_changed_callback = None
         
-        print(f"✅ Created floating {name} dropdown")
+        debug(f"✅ Created floating {name} dropdown")
     
     def paintEvent(self, event):
         """Custom paint event to draw rounded background"""
@@ -627,7 +699,182 @@ class MainController(QObject):
         """Setup signal connections"""
         # Note: textToFilterBubble signal connection moved to setup_dropdown_connections
         # to ensure UI is fully loaded before connecting
-        print("✅ Main controller connections setup complete")
+        info("✅ Main controller connections setup complete")
+    
+    def setup_preferences_button(self):
+        """Setup the preferences button in the sidebar"""
+        # Find the preferences button
+        preferences_button = self.main_window.findChild(QLabel, "preferencesButton")
+        if preferences_button:
+            # Make it clickable by installing an event filter
+            preferences_button.installEventFilter(self)
+            # Store reference for event filtering
+            self.preferences_button = preferences_button
+            debug("✅ Preferences button connected")
+        else:
+            warning("⚠️ Preferences button not found in UI")
+    
+    def on_preferences_clicked(self):
+        """Handle preferences button click - open preferences window"""
+        try:
+            from views.preferences_window import PreferencesWindow
+            
+            # Get current folders BEFORE opening dialog
+            old_folders = self.settings_model.get_setting('search_folders', [])
+            
+            # Create and show preferences window
+            preferences_window = PreferencesWindow(self.settings_model, self.main_window)
+            result = preferences_window.exec()
+            
+            if result == QDialog.Accepted:
+                # Get NEW folders AFTER save
+                new_folders = self.settings_model.get_setting('search_folders', [])
+                
+                info(f"✅ Preferences saved: {len(new_folders)} folder(s)")
+                for i, folder in enumerate(new_folders, 1):
+                    debug(f"  {i}. {folder}")
+                
+                # Check if folders changed
+                if set(old_folders) != set(new_folders):
+                    info("🔄 Folders changed - syncing database...")
+                    self.sync_database_after_folder_change(new_folders, old_folders)
+                else:
+                    warning("   No folder changes detected")
+            # Note: preferences_window.py already logs when cancelled, no need to duplicate
+                
+        except Exception as e:
+            error(f"❌ Error opening preferences window: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def check_first_time_setup(self):
+        """Check if this is first-time setup (no folders configured)"""
+        search_folders = self.settings_model.get_setting('search_folders', [])
+        
+        if not search_folders or len(search_folders) == 0:
+            warning("🎯 First-time setup: No folders configured")
+            return True
+        
+        return False
+    
+    def handle_first_time_setup(self):
+        """Handle first-time setup by auto-opening preferences"""
+        if self.check_first_time_setup():
+            info("🎯 Opening preferences for first-time setup...")
+            # Show message briefly
+            if hasattr(self.main_window, 'update_status_display'):
+                self.main_window.update_status_display(
+                    "Welcome! Please configure your sample folders to get started.",
+                    "ready"
+                )
+            # Auto-open preferences after brief delay
+            QTimer.singleShot(1000, self.open_preferences_for_first_time)
+    
+    def open_preferences_for_first_time(self):
+        """Open preferences specifically for first-time setup"""
+        from views.preferences_window import PreferencesWindow
+        
+        preferences_window = PreferencesWindow(self.settings_model, self.main_window)
+        result = preferences_window.exec()
+        
+        if result == QDialog.Accepted:
+            folders = self.settings_model.get_setting('search_folders', [])
+            if folders:
+                info(f"✅ First-time setup complete: {len(folders)} folder(s)")
+                # Trigger initial database sync
+                self.sync_database_after_folder_change(folders, [])
+            else:
+                warning("⚠️ No folders selected - user must configure before using app")
+        else:
+            warning("⚠️ First-time setup cancelled - app may not function properly")
+    
+    def sync_database_after_folder_change(self, new_folders, old_folders):
+        """
+        Sync database when folders change
+        - Remove files from folders no longer in the list
+        - Add files from new folders
+        """
+        import appdirs
+        from settings.core_settings import APP_NAME, APP_AUTHOR
+        
+        info("🔄 Syncing database after folder change...")
+        debug(f"  Old folders: {len(old_folders)}")
+        debug(f"  New folders: {len(new_folders)}")
+        
+        # Get database path
+        config_dir = appdirs.user_config_dir(APP_NAME, APP_AUTHOR)
+        db_path = os.path.join(config_dir, 'patchio_index.db')
+        
+        new_folders_set = set(new_folders)
+        old_folders_set = set(old_folders)
+        
+        # Folders to remove (in old but not in new)
+        folders_to_remove = old_folders_set - new_folders_set
+        
+        # Folders to add (in new but not in old)
+        folders_to_add = new_folders_set - old_folders_set
+        
+        if folders_to_remove:
+            info(f"🗑️  Removing {len(folders_to_remove)} folder(s) from index:")
+            for folder in folders_to_remove:
+                debug(f"    - {folder}")
+                self.remove_folder_from_database(db_path, folder)
+        
+        if folders_to_add or folders_to_remove:
+            # Restart file watcher with new folders
+            info("🔄 Restarting file index manager with updated folders...")
+            self.restart_file_watcher(new_folders_set)
+        else:
+            warning("✅ No folder changes detected")
+    
+    def remove_folder_from_database(self, db_path, folder_path):
+        """Remove all files from a specific folder from the database"""
+        try:
+            import sqlite3
+            
+            conn = sqlite3.connect(db_path, timeout=10.0)
+            cursor = conn.cursor()
+            
+            # Remove all files that start with this folder path
+            cursor.execute("""
+                DELETE FROM files 
+                WHERE path LIKE ?
+            """, (f"{folder_path}%",))
+            
+            deleted_count = cursor.rowcount
+            conn.commit()
+            conn.close()
+            
+            info(f"   Removed {deleted_count} file(s) from {os.path.basename(folder_path)}")
+            
+        except Exception as e:
+            error(f"❌ Error removing folder from database: {e}")
+    
+    def restart_file_watcher(self, new_folders):
+        """Restart file watcher with new folder configuration"""
+        # Stop existing file watcher if running
+        if hasattr(self, 'file_index_manager') and self.file_index_manager:
+            self.file_index_manager.stop_real_time_monitoring()
+            info("🛑 Stopped existing file watcher")
+        
+        # Stop sync worker if running
+        if hasattr(self, 'sync_worker') and self.sync_worker and self.sync_worker.isRunning():
+            self.sync_worker.stop_sync()
+            self.sync_worker.quit()
+            self.sync_worker.wait(2000)
+            info("🛑 Stopped existing sync worker")
+        
+        # Clear the sync worker reference so a new one can be created
+        self.sync_worker = None
+        
+        # Re-initialize file watcher with new folders
+        self._setup_file_watcher()
+        
+        # Show appropriate message based on whether folders exist
+        if new_folders and len(new_folders) > 0:
+            info(f"✅ File watcher restarted with {len(new_folders)} folder(s)")
+        else:
+            warning("✅ File watcher stopped (no folders configured)")
     
     def on_text_to_filter_bubble(self, text):
         """Handle search text when user presses Enter - keep text in search bar and start search"""
@@ -638,7 +885,7 @@ class MainController(QObject):
         # Start the search with the text from the search bar
         # Filters will adjust the query as needed
         
-        print(f"🔍 Starting search with text: '{text.strip()}' from search bar")
+        info(f"🔍 Starting search with text: '{text.strip()}' from search bar")
         
         # Update the filter summary to include the search term
         self.update_search_summary(text.strip())
@@ -664,7 +911,7 @@ class MainController(QObject):
         # Connect the new signal for converting text to filter bubbles
         if hasattr(self.main_window, 'search_input') and hasattr(self.main_window.search_input, 'textToFilterBubble'):
             self.main_window.search_input.textToFilterBubble.connect(self.on_text_to_filter_bubble)
-            print("✅ Connected textToFilterBubble signal")
+            debug("✅ Connected textToFilterBubble signal")
         
         # Removed textChanged connection - search summary only updates when search starts
         
@@ -673,9 +920,9 @@ class MainController(QObject):
         genres_button = self.main_window.findChild(QPushButton, "genresDropdown")
         vendor_button = self.main_window.findChild(QPushButton, "vendorDropdown")
         
-        print(f"🔍 Dropdown setup - Instruments: {instruments_button is not None}")
-        print(f"🔍 Dropdown setup - Genres: {genres_button is not None}")
-        print(f"🔍 Dropdown setup - Vendor: {vendor_button is not None}")
+        debug(f"🔍 Dropdown setup - Instruments: {instruments_button is not None}")
+        debug(f"🔍 Dropdown setup - Genres: {genres_button is not None}")
+        debug(f"🔍 Dropdown setup - Vendor: {vendor_button is not None}")
         
         # Create floating dropdown menus using unified approach
         self.create_unified_dropdowns()
@@ -683,13 +930,13 @@ class MainController(QObject):
         # Connect dropdown buttons
         if instruments_button and hasattr(self, 'instruments_dropdown'):
             instruments_button.clicked.connect(lambda: self.toggle_dropdown(self.instruments_dropdown))
-            print("✅ Connected Instruments dropdown")
+            debug("✅ Connected Instruments dropdown")
         if genres_button and hasattr(self, 'genres_dropdown'):
             genres_button.clicked.connect(lambda: self.toggle_dropdown(self.genres_dropdown))
-            print("✅ Connected Genres dropdown")
+            debug("✅ Connected Genres dropdown")
         if vendor_button and hasattr(self, 'vendor_dropdown'):
             vendor_button.clicked.connect(lambda: self.toggle_dropdown(self.vendor_dropdown))
-            print("✅ Connected Vendor dropdown")
+            debug("✅ Connected Vendor dropdown")
         
         # Setup click outside handler
         self.setup_click_outside_handler()
@@ -698,12 +945,15 @@ class MainController(QObject):
         clear_filters_button = self.main_window.findChild(QPushButton, "clearFiltersButton")
         if clear_filters_button:
             clear_filters_button.clicked.connect(self.clear_all_filters)
-            print("✅ Connected Clear All button")
+            debug("✅ Connected Clear All button")
         else:
-            print("⚠️ Clear All button not found")
+            warning("⚠️ Clear All button not found")
         
         # Setup filter management after a short delay to ensure UI is fully loaded
         QTimer.singleShot(100, self.setup_filter_management)
+        
+        # Setup preferences button (after UI is loaded)
+        self.setup_preferences_button()
     
     def create_unified_dropdowns(self):
         """Create all dropdowns using the unified FloatingDropdown class"""
@@ -736,14 +986,14 @@ class MainController(QObject):
         self.genres_dropdown = FloatingDropdown('genres', dropdown_configs['genres'])
         self.vendor_dropdown = FloatingDropdown('vendor', dropdown_configs['vendor'])
         
-        print("✅ Created all dropdown menus")
+        debug("✅ Created all dropdown menus")
         
         # Set up checkbox change callbacks
         self.instruments_dropdown.set_checkbox_changed_callback(self.on_filter_checkbox_changed)
         self.genres_dropdown.set_checkbox_changed_callback(self.on_filter_checkbox_changed)
         self.vendor_dropdown.set_checkbox_changed_callback(self.on_filter_checkbox_changed)
         
-        print("✅ Set up checkbox change callbacks")
+        debug("✅ Set up checkbox change callbacks")
     
     def toggle_dropdown(self, dropdown_menu):
         """Toggle dropdown menu visibility with proper positioning"""
@@ -782,11 +1032,11 @@ class MainController(QObject):
                 dropdown_y = button_global_pos.y() + 4  # Small gap below button
                 
                 dropdown_menu.move(dropdown_x, dropdown_y)
-                print(f"🔍 Positioned {dropdown_menu.objectName()} at global ({dropdown_x}, {dropdown_y}) - floating freely")
+                debug(f"🔍 Positioned {dropdown_menu.objectName()} at global ({dropdown_x}, {dropdown_y}) - floating freely")
             else:
-                print(f"⚠️ Could not find button {button_name}")
+                warning(f"⚠️ Could not find button {button_name}")
         else:
-            print(f"⚠️ Could not determine button name for {dropdown_menu.objectName()}")
+            warning(f"⚠️ Could not determine button name for {dropdown_menu.objectName()}")
     
     def hide_all_dropdowns(self):
         """Hide all dropdown menus"""
@@ -803,11 +1053,17 @@ class MainController(QObject):
         self.main_window.installEventFilter(self)
     
     def eventFilter(self, obj, event):
-        """Event filter to handle click outside dropdowns and escape key"""
+        """Event filter to handle click outside dropdowns, escape key, and preferences button"""
         from PySide6.QtCore import QEvent
         from PySide6.QtGui import QMouseEvent, QKeyEvent
         
         if event.type() == QEvent.MouseButtonPress:
+            # Check if preferences button was clicked
+            if hasattr(self, 'preferences_button') and obj == self.preferences_button:
+                debug("🔍 Preferences button clicked!")
+                self.on_preferences_clicked()
+                return True
+            
             # Check if click is outside dropdown menus
             dropdowns = []
             if hasattr(self, 'instruments_dropdown'):
@@ -830,14 +1086,14 @@ class MainController(QObject):
                     
                     if not dropdown_global_rect.contains(click_global_pos):
                         dropdown.setVisible(False)
-                        print(f"🔍 Closed {dropdown.objectName()} - clicked outside")
+                        debug(f"🔍 Closed {dropdown.objectName()} - clicked outside")
         
         # Call parent event filter
         return super().eventFilter(obj, event)
     
     def run(self):
         """Run the application"""
-        print("🚀 Starting PatchIO with MVC architecture")
+        info("🚀 Starting PatchIO with MVC architecture")
         return self.main_window.show()
     
     def get_search_controller(self):
@@ -858,19 +1114,19 @@ class MainController(QObject):
         self.filter_tags_container = self.main_window.findChild(QWidget, "filterTagsContainer")
         self.filter_summary_label = self.main_window.findChild(QLabel, "filterSummaryLabel")
         
-        print(f"🔍 Debug - Main window: {self.main_window}")
-        print(f"🔍 Debug - Filter tags container: {self.filter_tags_container}")
-        print(f"🔍 Debug - Filter summary label: {self.filter_summary_label}")
+        debug(f"🔍 Debug - Main window: {self.main_window}")
+        debug(f"🔍 Debug - Filter tags container: {self.filter_tags_container}")
+        debug(f"🔍 Debug - Filter summary label: {self.filter_summary_label}")
         
         if self.filter_tags_container:
-            print("✅ Filter tags container found")
+            debug("✅ Filter tags container found")
         else:
-            print("⚠️ Filter tags container not found")
+            warning("⚠️ Filter tags container not found")
         
         if self.filter_summary_label:
-            print("✅ Filter summary label found")
+            debug("✅ Filter summary label found")
         else:
-            print("⚠️ Filter summary label not found")
+            warning("⚠️ Filter summary label not found")
     
     def add_filter(self, filter_type, filter_value):
         """Add a filter and create a bubble"""
@@ -889,7 +1145,7 @@ class MainController(QObject):
             # Trigger search update
             self.search_controller.on_filters_changed()
             
-            print(f"✅ Added filter bubble: {filter_value}")
+            debug(f"✅ Added filter bubble: {filter_value}")
     
     def remove_filter(self, filter_type, filter_value):
         """Remove a filter and its bubble"""
@@ -899,7 +1155,7 @@ class MainController(QObject):
             # Clean up empty filter type entries
             if not self.active_filters[filter_type]:
                 del self.active_filters[filter_type]
-                print(f"🔍 Removed empty filter type: {filter_type}")
+                info(f"🔍 Removed empty filter type: {filter_type}")
             
             # Remove filter bubble
             self.remove_filter_bubble(filter_value)
@@ -912,20 +1168,20 @@ class MainController(QObject):
             
             # Check if no more active filters - clear the tree and stop search
             if not self.active_filters:
-                print("🔍 No more active filters - clearing results tree and stopping search")
+                debug("🔍 No more active filters - clearing results tree and stopping search")
                 if hasattr(self, 'main_window') and self.main_window:
                     self.main_window.clear_results()
                 
                 # Stop any running search since there's nothing to search for
                 if hasattr(self, 'search_controller') and self.search_controller:
                     self.search_controller.on_search_cancelled()
-                    print("🔍 Cancelled running search - no filters active")
+                    debug("🔍 Cancelled running search - no filters active")
             
             # Trigger search update
             self.search_controller.on_filters_changed()
             
-            print(f"✅ Removed filter bubble: {filter_value}")
-            print(f"🔍 Active filters after removal: {self.active_filters}")
+            info(f"✅ Removed filter bubble: {filter_value}")
+            debug(f"🔍 Active filters after removal: {self.active_filters}")
     
     def uncheck_dropdown_item(self, filter_type, filter_value):
         """Uncheck the corresponding dropdown item when a filter is removed"""
@@ -980,7 +1236,7 @@ class MainController(QObject):
         if hasattr(dropdown, 'checkboxes') and item_name in dropdown.checkboxes:
             checkbox = dropdown.checkboxes[item_name]
             checkbox.setChecked(False)
-            print(f"🔍 Unchecked dropdown item: {dropdown_name} -> {item_name}")
+            debug(f"🔍 Unchecked dropdown item: {dropdown_name} -> {item_name}")
     
     def create_filter_bubble(self, filter_value):
         """Create and add a filter bubble to the UI"""
@@ -1138,7 +1394,7 @@ class MainController(QObject):
         # Trigger search update
         self.search_controller.on_filters_changed()
         
-        print("✅ Cleared all filters")
+        debug("✅ Cleared all filters")
     
     def uncheck_all_dropdown_items(self):
         """Uncheck all dropdown checkboxes when clearing all filters"""
@@ -1148,21 +1404,21 @@ class MainController(QObject):
             if dropdown and hasattr(dropdown, 'checkboxes'):
                 for checkbox in dropdown.checkboxes.values():
                     checkbox.setChecked(False)
-                print(f"🔍 Unchecked all items in {dropdown_name} dropdown")
+                debug(f"🔍 Unchecked all items in {dropdown_name} dropdown")
     
     def remove_filter_bubble_callback(self, filter_type, filter_value):
         """Callback for when a filter bubble is removed"""
-        print(f"🔍 Filter bubble X clicked: filter_type={filter_type}, filter_value={filter_value}")
-        print(f"🔍 Current active_filters before removal: {self.active_filters}")
+        debug(f"🔍 Filter bubble X clicked: filter_type={filter_type}, filter_value={filter_value}")
+        debug(f"🔍 Current active_filters before removal: {self.active_filters}")
         
         # Find which filter type this value belongs to
         for filter_type, values in self.active_filters.items():
             if filter_value in values:
-                print(f"🔍 Found filter to remove: {filter_type} -> {filter_value}")
+                debug(f"🔍 Found filter to remove: {filter_type} -> {filter_value}")
                 self.remove_filter(filter_type, filter_value)
                 break
         else:
-            print(f"⚠️ Could not find filter to remove: {filter_value}")
+            warning(f"⚠️ Could not find filter to remove: {filter_value}")
     
     def on_filter_checkbox_changed(self, dropdown_name, item_name, checked):
         """Handle filter checkbox changes"""
@@ -1234,6 +1490,12 @@ class MainController(QObject):
             # Get indexed folders from settings
             indexed_folders = set(self.settings_model.get_setting('search_folders', []))
             
+            # DON'T start file watcher if no folders configured
+            if not indexed_folders:
+                warning("⚠️ File index manager not started - no folders configured")
+                debug("   Configure folders in Preferences to enable scanning")
+                return
+            
             if indexed_folders:
                 # Create comprehensive file index manager
                 self.file_index_manager = FileIndexManager(db_path, indexed_folders)
@@ -1241,7 +1503,7 @@ class MainController(QObject):
                 # Only start sync worker if one doesn't already exist
                 if not hasattr(self, 'sync_worker') or self.sync_worker is None:
                     # Start background sync worker to avoid blocking UI
-                    print("🔄 Starting background file index sync...")
+                    info("🔄 Starting background file index sync...")
                     self.sync_worker = BackgroundSyncWorker(db_path, indexed_folders)
                     self.sync_worker.sync_progress.connect(self._on_sync_progress)
                     self.sync_worker.sync_completed.connect(self._on_sync_completed)
@@ -1251,25 +1513,25 @@ class MainController(QObject):
                     self.sync_worker.start_scan_ui.connect(self._on_start_scan_ui)
                     self.sync_worker.start()
                 else:
-                    print("⚠️ Sync worker already exists, skipping creation")
+                    warning("⚠️ Sync worker already exists, skipping creation")
                 
                 # Note: Scan progress will be started after UI is fully initialized
                 
                 # Start real-time monitoring immediately (doesn't block)
                 def handle_file_event(event):
-                    print(f"📁 Real-time event: {event.event_type} - {os.path.basename(event.path)}")
+                    debug(f"📁 Real-time event: {event.event_type} - {os.path.basename(event.path)}")
                 
                 self.file_index_manager.start_real_time_monitoring(handle_file_event)
-                print("✅ File index manager started for {} folders".format(len(indexed_folders)))
+                debug("✅ File index manager started for {} folders".format(len(indexed_folders)))
             else:
-                print("⚠️ File index manager not started - no indexed folders configured")
+                warning("⚠️ File index manager not started - no indexed folders configured")
                 
         except Exception as e:
-            print("❌ Failed to setup file index manager: {}".format(e))
+            error("❌ Failed to setup file index manager: {}".format(e))
     
     def _on_sync_progress(self, message: str):
         """Handle sync progress updates"""
-        print(message)
+        debug(message)
     
     def _on_scan_progress(self, progress_info: dict):
         """🚀 Handle detailed scan progress updates"""
@@ -1284,7 +1546,7 @@ class MainController(QObject):
     
     def _on_sync_completed(self, sync_results: dict):
         """Handle sync completion"""
-        print(f"✅ Background sync completed: {sync_results}")
+        info(f"✅ Background sync completed: {sync_results}")
         
         # Print detailed completion message
         sync_time = sync_results.get('sync_time', 0)
@@ -1293,9 +1555,9 @@ class MainController(QObject):
         files_updated = sync_results.get('files_updated', 0)
         
         if files_added > 0 or files_removed > 0 or files_updated > 0:
-            print(f"✅ Background sync completed in {sync_time:.2f}s: +{files_added} -{files_removed} ~{files_updated}")
+            info(f"✅ Background sync completed in {sync_time:.2f}s: +{files_added} -{files_removed} ~{files_updated}")
         else:
-            print(f"⚡ Background sync completed in {sync_time:.2f}s: No changes needed")
+            info(f"⚡ Background sync completed in {sync_time:.2f}s: No changes needed")
         
         # 🚀 Complete scan progress in UI
         if hasattr(self.main_window, 'complete_scan_progress'):
@@ -1306,23 +1568,23 @@ class MainController(QObject):
         
         # Properly clean up the sync worker thread with a slight delay
         if hasattr(self, 'sync_worker') and self.sync_worker:
-            print("🧹 Cleaning up sync worker thread...")
+            debug("🧹 Cleaning up sync worker thread...")
             # Use QTimer to delay cleanup slightly to ensure thread has finished
             QTimer.singleShot(100, self._cleanup_sync_worker)
     
     def _cleanup_sync_worker(self):
         """Clean up the sync worker thread"""
         if hasattr(self, 'sync_worker') and self.sync_worker:
-            print("🧹 Performing sync worker cleanup...")
+            debug("🧹 Performing sync worker cleanup...")
             self.sync_worker.quit()
             self.sync_worker.wait(5000)  # Wait up to 5 seconds for thread to finish
             if self.sync_worker.isRunning():
-                print("⚠️ Sync worker still running, forcing termination...")
+                warning("⚠️ Sync worker still running, forcing termination...")
                 self.sync_worker.terminate()
                 self.sync_worker.wait(1000)  # Wait 1 more second
             self.sync_worker.deleteLater()
             self.sync_worker = None
-            print("✅ Sync worker thread cleaned up successfully")
+            debug("✅ Sync worker thread cleaned up successfully")
     
     def _start_vendor_extraction_worker(self):
         """Start the vendor extraction worker"""
@@ -1336,20 +1598,20 @@ class MainController(QObject):
             
             # Only start if we don't already have one running
             if not hasattr(self, 'vendor_extraction_worker') or self.vendor_extraction_worker is None:
-                print("🔍 Starting background vendor extraction...")
+                info("🔍 Starting background vendor extraction...")
                 self.vendor_extraction_worker = BackgroundVendorExtractionWorker(db_path)
                 self.vendor_extraction_worker.extraction_progress.connect(self._on_vendor_extraction_progress)
                 self.vendor_extraction_worker.extraction_completed.connect(self._on_vendor_extraction_completed)
                 self.vendor_extraction_worker.start()
             else:
-                print("⚠️ Vendor extraction worker already running")
+                warning("⚠️ Vendor extraction worker already running")
                 
         except Exception as e:
-            print(f"❌ Error starting vendor extraction worker: {e}")
+            error(f"❌ Error starting vendor extraction worker: {e}")
     
     def _on_vendor_extraction_progress(self, message: str):
         """Handle vendor extraction progress updates"""
-        print(f"🔍 Vendor extraction: {message}")
+        debug(f"🔍 Vendor extraction: {message}")
     
     def _on_vendor_extraction_completed(self, results: dict):
         """Handle vendor extraction completion"""
@@ -1357,9 +1619,9 @@ class MainController(QObject):
         files_updated = results.get('files_updated', 0)
         
         if files_updated > 0:
-            print(f"✅ Vendor extraction completed: {files_updated} files updated with vendor/library information")
+            info(f"✅ Vendor extraction completed: {files_updated} files updated with vendor/library information")
         else:
-            print("✅ Vendor extraction completed: No files needed updating")
+            warning("✅ Vendor extraction completed: No files needed updating")
         
         # Clean up the vendor extraction worker
         if hasattr(self, 'vendor_extraction_worker') and self.vendor_extraction_worker:
@@ -1373,7 +1635,7 @@ class MainController(QObject):
     
     def _on_sync_failed(self, error_message: str):
         """Handle sync failure"""
-        print(f"❌ Background sync failed: {error_message}")
+        error(f"❌ Background sync failed: {error_message}")
         
         # 🚀 Cancel scan progress in UI
         if hasattr(self.main_window, 'cancel_scan_progress'):
@@ -1381,7 +1643,7 @@ class MainController(QObject):
         
         # Properly clean up the sync worker thread with a slight delay
         if hasattr(self, 'sync_worker') and self.sync_worker:
-            print("🧹 Cleaning up sync worker thread after failure...")
+            debug("🧹 Cleaning up sync worker thread after failure...")
             # Use QTimer to delay cleanup slightly to ensure thread has finished
             QTimer.singleShot(100, self._cleanup_sync_worker)
     
@@ -1412,10 +1674,10 @@ class MainController(QObject):
                 self._update_file_in_database(db_path, event.path)
             
             # Log the event
-            print(f"📁 {event.event_type.upper()}: {os.path.basename(event.path)}")
+            debug(f"📁 {event.event_type.upper()}: {os.path.basename(event.path)}")
             
         except Exception as e:
-            print(f"❌ Error handling file event: {e}")
+            error(f"❌ Error handling file event: {e}")
     
     def _add_file_to_database(self, db_path: str, file_path: str):
         """Add a file to the database using existing logic"""
@@ -1435,7 +1697,7 @@ class MainController(QObject):
             conn.close()
             
         except Exception as e:
-            print(f"❌ Error adding file to database: {e}")
+            error(f"❌ Error adding file to database: {e}")
     
     def _remove_file_from_database(self, db_path: str, file_path: str):
         """Remove a file from the database using existing logic"""
@@ -1455,7 +1717,7 @@ class MainController(QObject):
             conn.close()
             
         except Exception as e:
-            print(f"❌ Error removing file from database: {e}")
+            error(f"❌ Error removing file from database: {e}")
     
     def _move_file_in_database(self, db_path: str, old_path: str, new_path: str):
         """Move/rename a file in the database using existing logic"""
@@ -1475,7 +1737,7 @@ class MainController(QObject):
             conn.close()
             
         except Exception as e:
-            print(f"❌ Error moving file in database: {e}")
+            error(f"❌ Error moving file in database: {e}")
     
     def _update_file_in_database(self, db_path: str, file_path: str):
         """Update a file in the database using existing logic"""
@@ -1495,7 +1757,7 @@ class MainController(QObject):
             conn.close()
             
         except Exception as e:
-            print(f"❌ Error updating file in database: {e}")
+            error(f"❌ Error updating file in database: {e}")
     
     
     
@@ -1503,7 +1765,7 @@ class MainController(QObject):
         """Stop the file index manager when application closes"""
         if hasattr(self, 'file_index_manager') and self.file_index_manager:
             self.file_index_manager.stop_real_time_monitoring()
-            print("🛑 File index manager stopped")
+            info("🛑 File index manager stopped")
         
         # Stop background sync worker if running
         if hasattr(self, 'sync_worker') and self.sync_worker.isRunning():
@@ -1523,7 +1785,7 @@ class MainController(QObject):
         if hasattr(self, 'file_index_manager') and self.file_index_manager:
             return self.file_index_manager.sync_index_with_filesystem(force_full_sync)
         else:
-            print("⚠️ File index manager not available")
+            warning("⚠️ File index manager not available")
             return {}
     
     def get_file_metadata(self, file_path: str) -> Optional[Dict]:

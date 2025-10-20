@@ -32,7 +32,7 @@ try:
         info("✅ Successfully imported settings from settings.core_settings")
     except RuntimeError:
         # Logger not initialized yet, use print instead
-        print("✅ Successfully imported settings from settings.core_settings")
+        debug("✅ Successfully imported settings from settings.core_settings")
         
 except ImportError as e:
     # Try to use logger, but fall back to print if not available
@@ -47,14 +47,14 @@ except ImportError as e:
         error("❌ Application cannot start without settings.core_settings")
         error("❌ Please ensure settings/core_settings.py exists and is accessible")
     except RuntimeError:
-        print("❌ CRITICAL ERROR: Cannot import settings.core_settings")
-        print("🔍 Error details: {}".format(e))
-        print("🔍 Current working directory: {}".format(os.getcwd()))
-        print("🔍 File location: {}".format(__file__))
-        print("🔍 Expected settings file: {}".format(os.path.join(parent_dir, 'settings', 'core_settings.py')))
-        print("")
-        print("❌ Application cannot start without settings.core_settings")
-        print("❌ Please ensure settings/core_settings.py exists and is accessible")
+        critical("❌ CRITICAL ERROR: Cannot import settings.core_settings")
+        error("🔍 Error details: {}".format(e))
+        debug("🔍 Current working directory: {}".format(os.getcwd()))
+        debug("🔍 File location: {}".format(__file__))
+        debug("🔍 Expected settings file: {}".format(os.path.join(parent_dir, 'settings', 'core_settings.py')))
+        debug("")
+        error("❌ Application cannot start without settings.core_settings")
+        error("❌ Please ensure settings/core_settings.py exists and is accessible")
     raise ImportError("Failed to import settings.core_settings: {}".format(e))
 
 class SearchModel:
@@ -365,14 +365,14 @@ class SearchModel:
             if search_conditions:
                 where_clause = " AND ".join(search_conditions)
                 sql_query = f"""
-                    SELECT id, path, name, vendor, library, instrument, genre, tags, file_type
+                    SELECT id, path, name, vendor, library, project, instrument, genre, tags, file_type
                     FROM files 
                     WHERE {where_clause}
                     ORDER BY name
                 """
             else:
                 sql_query = """
-                    SELECT id, path, name, vendor, library, instrument, genre, tags, file_type
+                    SELECT id, path, name, vendor, library, project, instrument, genre, tags, file_type
                     FROM files 
                     ORDER BY name
                 """
@@ -384,7 +384,7 @@ class SearchModel:
             rows = cursor.fetchall()
             
             for row in rows:
-                file_id, path, name, vendor, library, instrument, genre, tags, file_type = row
+                file_id, path, name, vendor, library, project, instrument, genre, tags, file_type = row
                 
                 # Get file info
                 file_name = os.path.basename(path) if path else name
@@ -395,7 +395,8 @@ class SearchModel:
                     "name": file_name,
                     "path": path or "",
                     "vendor": vendor or "Unknown Vendor",
-                    "library": library or "Unknown Library", 
+                    "library": library or "Unknown Library",
+                    "project": project,
                     "instrument": instrument or "",
                     "genre": genre or "",
                     "tags": tags or "",

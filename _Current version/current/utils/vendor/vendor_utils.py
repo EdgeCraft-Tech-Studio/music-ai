@@ -14,6 +14,7 @@ from typing import Dict, Optional
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from settings.core_settings import APP_NAME, APP_AUTHOR
+from utils.logger import debug, info, warning, error, critical
 
 def get_database_path():
     """Get the absolute path to the knowledge database file."""
@@ -74,7 +75,7 @@ def save_vendor_map(vendor_map: Dict[str, str]) -> bool:
     Returns:
         bool: True if successful, False otherwise.
     """
-    print("⚠️ Warning: save_vendor_map is deprecated. Please update the database directly.")
+    warning("⚠️ Warning: save_vendor_map is deprecated. Please update the database directly.")
     return False
 
 
@@ -123,7 +124,7 @@ def add_vendor_mapping(raw_name: str, normalized_name: str) -> bool:
     Returns:
         bool: True if successful, False otherwise.
     """
-    print("⚠️ Warning: add_vendor_mapping is deprecated. Please update the database directly.")
+    warning("⚠️ Warning: add_vendor_mapping is deprecated. Please update the database directly.")
     return False
 
 
@@ -138,7 +139,7 @@ def remove_vendor_mapping(raw_name: str) -> bool:
     Returns:
         bool: True if successful, False otherwise.
     """
-    print("⚠️ Warning: remove_vendor_mapping is deprecated. Please update the database directly.")
+    warning("⚠️ Warning: remove_vendor_mapping is deprecated. Please update the database directly.")
     return False
 
 
@@ -177,7 +178,7 @@ def test_vendor_normalization():
     """
     Test function to verify vendor normalization works correctly.
     """
-    print("Testing vendor normalization...")
+    debug("Testing vendor normalization...")
     
     # Test cases
     test_cases = [
@@ -194,25 +195,25 @@ def test_vendor_normalization():
     for raw_name, expected in test_cases:
         result = normalize_vendor(raw_name)
         status = "✓" if result == expected else "✗"
-        print(f"{status} '{raw_name}' -> '{result}' (expected: '{expected}')")
+        debug(f"{status} '{raw_name}' -> '{result}' (expected: '{expected}')")
     
     # Test adding new mapping
-    print("\nTesting add_vendor_mapping...")
+    debug("\nTesting add_vendor_mapping...")
     success = add_vendor_mapping("Test Vendor", "Test Vendor Normalized")
-    print(f"Add mapping: {'✓' if success else '✗'}")
+    debug(f"Add mapping: {'✓' if success else '✗'}")
     
     # Test the new mapping
     result = normalize_vendor("Test Vendor")
-    print(f"New mapping test: {'✓' if result == 'Test Vendor Normalized' else '✗'}")
+    debug(f"New mapping test: {'✓' if result == 'Test Vendor Normalized' else '✗'}")
     
     # Test removing mapping
-    print("\nTesting remove_vendor_mapping...")
+    debug("\nTesting remove_vendor_mapping...")
     success = remove_vendor_mapping("Test Vendor")
-    print(f"Remove mapping: {'✓' if success else '✗'}")
+    debug(f"Remove mapping: {'✓' if success else '✗'}")
     
     # Verify removal
     result = normalize_vendor("Test Vendor")
-    print(f"Removal test: {'✓' if result == 'Test Vendor' else '✗'}")
+    debug(f"Removal test: {'✓' if result == 'Test Vendor' else '✗'}")
 
 
 if __name__ == "__main__":

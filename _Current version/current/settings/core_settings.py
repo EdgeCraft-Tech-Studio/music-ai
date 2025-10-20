@@ -41,10 +41,7 @@ DEFAULT_EXTENSIONS = [
 ]
 
 DEFAULT_SEARCH_FOLDERS = [
-    '/Volumes/Samsung 850 EVO',
-    '/Users/shaked/Desktop/Samples',
-    '/Users/shaked/Music',
-    'C:\\Users\\amhae\\Music\\beats'
+    # Empty by default - users must configure folders in Preferences
 ]
 
 # ============================================================================

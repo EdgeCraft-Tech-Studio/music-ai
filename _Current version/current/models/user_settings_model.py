@@ -22,7 +22,7 @@ try:
         info("✅ Successfully imported settings from settings.core_settings")
     except RuntimeError:
         # Logger not initialized yet, use print instead
-        print("✅ Successfully imported settings from settings.core_settings")
+        debug("✅ Successfully imported settings from settings.core_settings")
         
 except ImportError as e:
     # Try to use logger, but fall back to print if not available
@@ -32,16 +32,27 @@ except ImportError as e:
         error(f"🔍 Error details: {e}")
         error("❌ Application cannot start without settings.core_settings")
     except RuntimeError:
-        print(f"❌ CRITICAL ERROR: Cannot import settings.core_settings")
-        print(f"🔍 Error details: {e}")
-        print("❌ Application cannot start without settings.core_settings")
+        critical(f"❌ CRITICAL ERROR: Cannot import settings.core_settings")
+        error(f"🔍 Error details: {e}")
+        error("❌ Application cannot start without settings.core_settings")
     raise ImportError(f"Failed to import settings.core_settings: {e}")
 
 class UserSettingsModel:
     """Model for user-configurable settings only.
     Static constants should be imported directly from settings.core_settings"""
     
+    _instance = None
+    
+    def __new__(cls):
+        """Singleton pattern - only one instance allowed"""
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+    
     def __init__(self):
+        # Only initialize once
+        if hasattr(self, '_initialized'):
+            return
         # Use same app identity as original patchio_old.py
         self.app_name = APP_NAME
         self.app_author = APP_AUTHOR
@@ -58,6 +69,9 @@ class UserSettingsModel:
         
         # Load current settings
         self.current_settings = self.load_settings()
+        
+        # Mark as initialized
+        self._initialized = True
     
     def get_log_file_path(self) -> str:
         """Get the log file path (matches original patchio_old.py)"""
@@ -76,20 +90,15 @@ class UserSettingsModel:
     def _load_current_settings(self) -> Dict[str, Any]:
         """Load current settings from file or create defaults"""
         try:
-            # Temporarily ignore old JSON file to avoid format conflicts
-            # TODO: Add migration logic for old JSON format
-            debug(f"📁 Using default settings (ignoring old JSON file for now)")
-            return self._get_default_settings()
-            
-            # Original code (commented out until we handle old format):
-            # if os.path.exists(self.settings_file):
-            #     with open(self.settings_file, 'r', encoding='utf-8') as f:
-            #         settings = json.load(f)
-            #         debug(f"📁 Loaded settings from: {self.settings_file}")
-            #         return settings
-            # else:
-            #     debug(f"📁 Settings file not found, using defaults: {self.settings_file}")
-            #     return self._get_default_settings()
+            # Load settings from JSON file if it exists
+            if os.path.exists(self.settings_file):
+                with open(self.settings_file, 'r', encoding='utf-8') as f:
+                    settings = json.load(f)
+                    debug(f"📁 Loaded settings from: {self.settings_file}")
+                    return settings
+            else:
+                debug(f"📁 Settings file not found, using defaults: {self.settings_file}")
+                return self._get_default_settings()
         except Exception as e:
             error(f"⚠️ Error loading settings: {e}")
             return self._get_default_settings()

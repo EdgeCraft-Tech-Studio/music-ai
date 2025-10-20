@@ -13,6 +13,9 @@ from models.user_settings_model import UserSettingsModel
 # Import file mappings directly from core settings
 from settings.core_settings import FILE_TYPE_MAPPINGS, FILE_ICON_MAPPINGS
 
+# 🚀 NEW: Using LibraryExtractorV3 for fast and accurate library/vendor extraction
+from utils.database.library_extractor_v3 import LibraryExtractorV3
+
 class FileModel:
     """Model for file operations and metadata extraction"""
     
@@ -20,6 +23,11 @@ class FileModel:
         self.settings = settings_model
         self.file_type_mappings = FILE_TYPE_MAPPINGS
         self.file_icon_mappings = FILE_ICON_MAPPINGS
+        
+        # 🚀 NEW: Initialize V3 library extractor with shared vendor cache
+        # Thread-safe: Vendors loaded ONCE from knowledge DB, shared across all threads
+        # No DB connections needed in workers (just reads from Python dict)
+        self.library_extractor_v3 = LibraryExtractorV3(use_knowledge_db=True)
     
     def get_file_icon(self, file_path: str) -> str:
         """Get appropriate icon based on file extension for music producers"""
@@ -80,41 +88,43 @@ class FileModel:
         return metadata
     
     def extract_library_info(self, file_path: str) -> str:
-        """Extract meaningful library name using proven patchio.py logic"""
+        """
+        Extract meaningful library name.
+        
+        🚀 NEW: Uses LibraryExtractorV3 (fast pattern-based extraction)
+        Thread-safe: Creates knowledge DB connection in worker thread
+        """
         if not file_path:
             return "Unknown Library"
         
-        # First, try project name extraction (highest priority)
-        project_name = self._extract_project_name(file_path)
-        if project_name:
-            return project_name
-        
-        # If no project name found, try the extract_library_root approach from patchio.py
-        library_name = self.extract_library_root_patchio_style(file_path)
-        
-        # If that didn't work, fall back to get_library_key approach
-        if not library_name or library_name in ['samples', 'audio', 'sounds', 'instruments']:
-            library_name = self.get_library_key_patchio_style(file_path)
-            # If get_library_key returns a full path, extract just the meaningful part
-            if library_name and os.sep in library_name:
-                # Get the last meaningful part of the path
-                path_parts = library_name.split(os.sep)
-                # Find the last part that's not a generic directory
-                for part in reversed(path_parts):
-                    if part.lower() not in ['libraries', 'kontakt libraries', 'player libraries', 'non player libraries'] and len(part) > 3:
-                        library_name = part
-                        break
-                else:
-                    # If no meaningful part found, use the last part
-                    library_name = os.path.basename(library_name.rstrip(os.sep))
-            elif not library_name:
-                library_name = "Unknown Library"
-        
-        # Debug: Print what library name was extracted (only if debug logging enabled)
-        from utils.logger import debug
-        debug(f"🔍 Library extraction for {os.path.basename(file_path)}: {library_name}")
-        
-        return library_name
+        # 🚀 NEW: Use V3 extractor with project detection (vendors from shared cache - thread-safe)
+        try:
+            vendor, library, project = self.library_extractor_v3.extract_vendor_library(file_path)
+            
+            # Debug: Print what library name was extracted (only if debug logging enabled)
+            from utils.logger import debug
+            debug(f"🔍 Library extraction for {os.path.basename(file_path)}: {library}")
+            
+            # 🚀 Show project name in UI if file is part of a project (instead of library)
+            if project:
+                return project
+            return library if library != 'Unknown Library' else "Unknown Library"
+            
+        except Exception as e:
+            # Fallback to old method if V3 fails
+            from utils.logger import warning
+            warning(f"⚠️  V3 extraction failed for {file_path}: {e}")
+            
+            # Old fallback logic
+            project_name = self._extract_project_name(file_path)
+            if project_name:
+                return project_name
+            
+            library_name = self.extract_library_root_patchio_style(file_path)
+            if not library_name or library_name in ['samples', 'audio', 'sounds', 'instruments']:
+                library_name = self.get_library_key_patchio_style(file_path)
+            
+            return library_name if library_name else "Unknown Library"
     
     def extract_library_root_patchio_style(self, path: str) -> str:
         """

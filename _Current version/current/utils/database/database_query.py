@@ -9,6 +9,7 @@ import os
 import json
 from typing import Dict, Any, List, Optional
 from datetime import datetime
+from utils.logger import debug, info, warning, error, critical
 
 class DatabaseQuery:
     """Query utility for the PatchIO indexed database"""
@@ -30,7 +31,7 @@ class DatabaseQuery:
             self.conn = sqlite3.connect(self.db_path)
             self.cursor = self.conn.cursor()
         except Exception as e:
-            print(f"❌ Error connecting to database: {e}")
+            error(f"❌ Error connecting to database: {e}")
             raise
     
     def search_files(self, 
@@ -153,7 +154,7 @@ class DatabaseQuery:
             return [dict(zip(columns, row)) for row in results]
             
         except Exception as e:
-            print(f"❌ Error searching files: {e}")
+            error(f"❌ Error searching files: {e}")
             return []
     
     def get_vendors(self) -> List[str]:
@@ -167,7 +168,7 @@ class DatabaseQuery:
             ''')
             return [row[0] for row in self.cursor.fetchall()]
         except Exception as e:
-            print(f"❌ Error getting vendors: {e}")
+            error(f"❌ Error getting vendors: {e}")
             return []
     
     def get_libraries(self) -> List[str]:
@@ -181,7 +182,7 @@ class DatabaseQuery:
             ''')
             return [row[0] for row in self.cursor.fetchall()]
         except Exception as e:
-            print(f"❌ Error getting libraries: {e}")
+            error(f"❌ Error getting libraries: {e}")
             return []
     
     def get_file_types(self) -> List[str]:
@@ -195,7 +196,7 @@ class DatabaseQuery:
             ''')
             return [row[0] for row in self.cursor.fetchall()]
         except Exception as e:
-            print(f"❌ Error getting file types: {e}")
+            error(f"❌ Error getting file types: {e}")
             return []
     
     def get_instruments(self) -> List[str]:
@@ -218,7 +219,7 @@ class DatabaseQuery:
                         instruments.add(row[0])
             return sorted(list(instruments))
         except Exception as e:
-            print(f"❌ Error getting instruments: {e}")
+            error(f"❌ Error getting instruments: {e}")
             return []
     
     def get_genres(self) -> List[str]:
@@ -241,7 +242,7 @@ class DatabaseQuery:
                         genres.add(row[0])
             return sorted(list(genres))
         except Exception as e:
-            print(f"❌ Error getting genres: {e}")
+            error(f"❌ Error getting genres: {e}")
             return []
     
     def get_moods(self) -> List[str]:
@@ -264,7 +265,7 @@ class DatabaseQuery:
                         moods.add(row[0])
             return sorted(list(moods))
         except Exception as e:
-            print(f"❌ Error getting moods: {e}")
+            error(f"❌ Error getting moods: {e}")
             return []
     
     def get_formats(self) -> List[str]:
@@ -287,7 +288,7 @@ class DatabaseQuery:
                         formats.add(row[0])
             return sorted(list(formats))
         except Exception as e:
-            print(f"❌ Error getting formats: {e}")
+            error(f"❌ Error getting formats: {e}")
             return []
     
     
@@ -330,7 +331,7 @@ class DatabaseQuery:
             }
             
         except Exception as e:
-            print(f"❌ Error getting database stats: {e}")
+            error(f"❌ Error getting database stats: {e}")
             return {}
     
     def close(self):
@@ -344,61 +345,61 @@ def demo_queries():
     try:
         query = DatabaseQuery("patchio_index.db")
         
-        print("🔍 PatchIO Database Query Demo")
-        print("=" * 50)
+        debug("🔍 PatchIO Database Query Demo")
+        debug("=" * 50)
         
         # Get database statistics
-        print("\n📊 Database Statistics:")
+        debug("\n📊 Database Statistics:")
         stats = query.get_database_stats()
         for key, value in stats.items():
             if key in ['files_by_type', 'top_libraries']:
-                print(f"  {key}:")
+                debug(f"  {key}:")
                 for item, count in value.items():
-                    print(f"    {item}: {count}")
+                    debug(f"    {item}: {count}")
             else:
-                print(f"  {key}: {value}")
+                debug(f"  {key}: {value}")
         
         # Get available file types
-        print("\n📄 Available File Types:")
+        debug("\n📄 Available File Types:")
         file_types = query.get_file_types()
         for file_type in file_types:
-            print(f"  - {file_type}")
+            debug(f"  - {file_type}")
         
         # Get available libraries
-        print("\n📚 Available Libraries:")
+        debug("\n📚 Available Libraries:")
         libraries = query.get_libraries()
         for library in libraries[:10]:  # Show first 10
-            print(f"  - {library}")
+            debug(f"  - {library}")
         if len(libraries) > 10:
-            print(f"  ... and {len(libraries) - 10} more")
+            debug(f"  ... and {len(libraries) - 10} more")
         
         # Search examples
-        print("\n🔍 Search Examples:")
+        debug("\n🔍 Search Examples:")
         
         # Search for audio files
         audio_files = query.search_files(file_types=['Audio'], limit=5)
-        print(f"  Audio files (first 5): {len(audio_files)} found")
+        debug(f"  Audio files (first 5): {len(audio_files)} found")
         for file in audio_files:
-            print(f"    - {file['name']} ({file['library']})")
+            debug(f"    - {file['name']} ({file['library']})")
         
         # Search for Kontakt files
         kontakt_files = query.search_files(file_types=['Kontakt'], limit=5)
-        print(f"  Kontakt files (first 5): {len(kontakt_files)} found")
+        debug(f"  Kontakt files (first 5): {len(kontakt_files)} found")
         for file in kontakt_files:
-            print(f"    - {file['name']} ({file['library']})")
+            debug(f"    - {file['name']} ({file['library']})")
         
         # Search by BPM
         bpm_files = query.search_files(bpm="120bpm", limit=5)
-        print(f"  120 BPM files: {len(bpm_files)} found")
+        debug(f"  120 BPM files: {len(bpm_files)} found")
         for file in bpm_files:
-            print(f"    - {file['name']} ({file['bpm']})")
+            debug(f"    - {file['name']} ({file['bpm']})")
         
         query.close()
         
     except FileNotFoundError:
-        print("❌ Database not found. Please run the indexer first to create the database.")
+        error("❌ Database not found. Please run the indexer first to create the database.")
     except Exception as e:
-        print(f"❌ Demo failed: {e}")
+        error(f"❌ Demo failed: {e}")
 
 
 if __name__ == "__main__":

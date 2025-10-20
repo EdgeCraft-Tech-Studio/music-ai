@@ -32,7 +32,7 @@ def main():
         app.load_ui()
         return app.run()
     except Exception as e:
-        error(f"Failed to start PatchIO: {e}")
+        error(f"❌ Failed to start PatchIO: {e}")
         import traceback
         traceback.print_exc()
         return 1

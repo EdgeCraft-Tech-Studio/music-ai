@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Change to the directory where this script is located
-cd "$(dirname "$0")"
+# Change to the project root directory (parent of build_scripts)
+cd "$(dirname "$0")/.."
 
 set -e  # Exit on any error
 
@@ -26,7 +26,7 @@ echo "🏗️  Architecture mode: $ARCHITECTURE"
 APP_NAME="PatchIO"
 DIST_DIR="builds/dist"
 RELEASES_DIR="builds/releases"
-DMG_CANVAS_PROJECT="builds/build_config/PatchIO DMG Project.dmgcanvas"
+DMG_CANVAS_PROJECT="build_scripts/build_config/PatchIO DMG Project.dmgcanvas"
 SIGNING_IDENTITY="Developer ID Application: Shaked Shachar (ZH2BJ5J2HZ)"
 
 # Determine which architectures to check based on parameter

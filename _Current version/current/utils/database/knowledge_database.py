@@ -9,28 +9,107 @@ This is the single source of truth for all PatchIO tagging and library knowledge
 import sqlite3
 import os
 import json
+import threading
 from typing import Dict, List, Optional, Tuple, Any
 from pathlib import Path
+from utils.logger import debug, info, warning, error, critical
 
 class KnowledgeDatabase:
     """Consolidated knowledge database for PatchIO tagging and library rules"""
     
-    _instances = {}  # Class-level cache for singleton instances
+    _instances = {}  # Class-level cache for singleton instances (per thread)
+    _lock = threading.Lock()  # Thread lock for instance creation
     
-    def __new__(cls, db_path: str = "patchio_knowledge.db"):
-        """Singleton pattern to avoid multiple instances of the same database"""
-        if db_path not in cls._instances:
-            instance = super(KnowledgeDatabase, cls).__new__(cls)
-            cls._instances[db_path] = instance
-        return cls._instances[db_path]
+    @staticmethod
+    def get_default_db_path() -> str:
+        """
+        Get the default knowledge database path (AppDirs location).
+        This is the SINGLE SOURCE OF TRUTH for where the knowledge DB should be.
+        
+        Returns:
+            str: Full path to patchio_knowledge.db in AppDirs
+        """
+        try:
+            import appdirs
+            from settings.core_settings import APP_NAME, APP_AUTHOR
+            
+            config_dir = appdirs.user_config_dir(APP_NAME, APP_AUTHOR)
+            os.makedirs(config_dir, exist_ok=True)  # Ensure directory exists
+            return os.path.join(config_dir, 'patchio_knowledge.db')
+        except Exception as e:
+            # Fallback to current directory if AppDirs fails
+            warning(f"⚠️  Could not determine AppDirs path: {e}")
+            debug(f"   Using current directory as fallback")
+            return "patchio_knowledge.db"
     
-    def __init__(self, db_path: str = "patchio_knowledge.db"):
+    def __new__(cls, db_path: str = None):
+        """
+        Thread-safe singleton pattern.
+        Each thread gets its own instance (with its own SQLite connection).
+        """
+        # Use default path if none provided
+        if db_path is None:
+            db_path = cls.get_default_db_path()
+        
+        # Create unique key: (db_path, thread_id)
+        thread_id = threading.get_ident()
+        instance_key = (db_path, thread_id)
+        
+        with cls._lock:
+            if instance_key not in cls._instances:
+                instance = super(KnowledgeDatabase, cls).__new__(cls)
+                cls._instances[instance_key] = instance
+            return cls._instances[instance_key]
+    
+    def __init__(self, db_path: str = None):
+        # Use default path if none provided
+        if db_path is None:
+            db_path = self.get_default_db_path()
+        
         # Only initialize if not already initialized
         if not hasattr(self, 'db_path') or self.db_path != db_path:
             self.db_path = db_path
             self.conn = None
             self.cursor = None
             self._initialize_database()
+    
+    def _is_new_database(self) -> bool:
+        """Check if this is a new database (no tables exist yet)"""
+        try:
+            self.cursor.execute("""
+                SELECT COUNT(*) FROM sqlite_master 
+                WHERE type='table' AND name='vendor_profiles'
+            """)
+            count = self.cursor.fetchone()[0]
+            return count == 0
+        except:
+            return True
+    
+    def _migrate_add_aliases_column(self):
+        """Migration: Add aliases column to vendor_profiles if it doesn't exist"""
+        try:
+            # Check if vendor_profiles table exists
+            self.cursor.execute("""
+                SELECT name FROM sqlite_master 
+                WHERE type='table' AND name='vendor_profiles'
+            """)
+            
+            if self.cursor.fetchone():
+                # Check if aliases column exists
+                self.cursor.execute("PRAGMA table_info(vendor_profiles)")
+                columns = [row[1] for row in self.cursor.fetchall()]
+                
+                if 'aliases' not in columns:
+                    # Add aliases column
+                    self.cursor.execute("""
+                        ALTER TABLE vendor_profiles 
+                        ADD COLUMN aliases TEXT
+                    """)
+                    self.conn.commit()
+                    debug("✅ Added 'aliases' column to vendor_profiles table")
+        except Exception as e:
+            # Silently ignore if table doesn't exist yet (will be created)
+            pass
     
     def _initialize_database(self):
         """Initialize the knowledge database with all required tables"""
@@ -41,12 +120,19 @@ class KnowledgeDatabase:
             # Enable foreign keys
             self.cursor.execute('PRAGMA foreign_keys = ON')
             
+            # Migration: Add aliases column if it doesn't exist
+            self._migrate_add_aliases_column()
+            
+            # Track if this is a new database
+            is_new_database = self._is_new_database()
+            
             # Create vendor profiles table
             self.cursor.execute('''
                 CREATE TABLE IF NOT EXISTS vendor_profiles (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     vendor_name TEXT UNIQUE NOT NULL,
                     display_name TEXT,
+                    aliases TEXT,  -- JSON array of vendor name variations
                     website TEXT,
                     description TEXT,
                     default_genre TEXT,
@@ -123,43 +209,103 @@ class KnowledgeDatabase:
             self.cursor.execute('CREATE INDEX IF NOT EXISTS idx_vendor_specific_words_vendor ON vendor_specific_words(vendor_name)')
             
             self.conn.commit()
+            
+            # Auto-sync vendors from knowledge_initial.json if this is a new DB
+            # or if vendor_profiles is empty
+            if is_new_database or self._should_sync_vendors():
+                self._auto_sync_vendors_from_json()
+            
             # Only print initialization message once per session
             if not hasattr(KnowledgeDatabase, '_initialized_dbs'):
                 KnowledgeDatabase._initialized_dbs = set()
             
             if self.db_path not in KnowledgeDatabase._initialized_dbs:
-                print(f"✅ Knowledge database initialized: {self.db_path}")
+                debug(f"✅ Knowledge database initialized: {self.db_path}")
                 KnowledgeDatabase._initialized_dbs.add(self.db_path)
             
         except Exception as e:
-            print(f"❌ Error initializing knowledge database: {e}")
+            error(f"❌ Error initializing knowledge database: {e}")
             raise
+    
+    def _should_sync_vendors(self) -> bool:
+        """Check if vendors should be synced (if vendor_profiles is empty)"""
+        try:
+            self.cursor.execute("SELECT COUNT(*) FROM vendor_profiles")
+            count = self.cursor.fetchone()[0]
+            return count == 0
+        except:
+            return True
+    
+    def _auto_sync_vendors_from_json(self):
+        """Automatically sync vendors from knowledge_initial.json on DB initialization"""
+        try:
+            # Load vendors from knowledge_initial.json
+            json_path = Path(__file__).parent / "knowledge_initial.json"
+            
+            if not json_path.exists():
+                # Silent - not an error, just no initial data
+                return
+            
+            with open(json_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                vendors = data.get('vendors', {})
+            
+            if not vendors:
+                return
+            
+            # Sync vendors to database
+            for canonical_name, aliases in vendors.items():
+                self.cursor.execute(
+                    'SELECT id FROM vendor_profiles WHERE vendor_name = ?',
+                    (canonical_name,)
+                )
+                existing = self.cursor.fetchone()
+                
+                if not existing:
+                    # Add new vendor
+                    self.cursor.execute('''
+                        INSERT INTO vendor_profiles (vendor_name, display_name, aliases)
+                        VALUES (?, ?, ?)
+                    ''', (canonical_name, canonical_name, json.dumps(aliases)))
+            
+            self.conn.commit()
+            
+            # Check count
+            self.cursor.execute("SELECT COUNT(*) FROM vendor_profiles")
+            count = self.cursor.fetchone()[0]
+            
+            if count > 0:
+                debug(f"✅ Auto-synced {count} vendors from knowledge_initial.json")
+                
+        except Exception as e:
+            # Silent failure - not critical
+            pass
     
     def migrate_from_existing_databases(self):
         """Migrate data from existing vendor_library.db and tag_mappings.db"""
-        print("🔄 Migrating data from existing databases...")
+        info("🔄 Migrating data from existing databases...")
         
         # Migrate vendor_library.db
         vendor_library_path = "vendor_library.db"
         if os.path.exists(vendor_library_path):
-            print(f"📦 Migrating vendor_library.db...")
+            debug(f"📦 Migrating vendor_library.db...")
             self._migrate_vendor_library_db(vendor_library_path)
         
         # Migrate tag_mappings.db
         tag_mappings_path = "tag_mappings.db"
         if os.path.exists(tag_mappings_path):
-            print(f"🏷️ Migrating tag_mappings.db...")
+            debug(f"🏷️ Migrating tag_mappings.db...")
             self._migrate_tag_mappings_db(tag_mappings_path)
         
         # Migrate hardcoded vendor specific words
-        print(f"🔤 Migrating hardcoded vendor specific words...")
+        debug(f"🔤 Migrating hardcoded vendor specific words...")
         self._migrate_hardcoded_vendor_words()
         
         # Migrate tag mappings to new structure
-        print(f"🏷️ Migrating tag mappings to new structure...")
+        debug(f"🏷️ Migrating tag mappings to new structure...")
         self._migrate_tag_mappings_to_new_structure()
         
-        print("✅ Migration completed!")
+        info("✅ Migration completed!")
     
     def _migrate_vendor_library_db(self, source_path: str):
         """Migrate data from vendor_library.db"""
@@ -201,7 +347,7 @@ class KnowledgeDatabase:
                             VALUES (?, ?, ?)
                         ''', (library, vendor_id[0], library))
                 
-                print(f"✅ Migrated {len(mappings)} vendor/library mappings")
+                debug(f"✅ Migrated {len(mappings)} vendor/library mappings")
             
             else:
                 # New structure with separate vendors and libraries tables
@@ -235,13 +381,13 @@ class KnowledgeDatabase:
                                 VALUES (?, ?, ?)
                             ''', (library_name, knowledge_vendor_id[0], library_name))
                 
-                print(f"✅ Migrated {len(vendors)} vendors and {len(libraries)} libraries")
+                debug(f"✅ Migrated {len(vendors)} vendors and {len(libraries)} libraries")
             
             source_conn.close()
             self.conn.commit()
             
         except Exception as e:
-            print(f"❌ Error migrating vendor_library.db: {e}")
+            error(f"❌ Error migrating vendor_library.db: {e}")
     
     def _migrate_tag_mappings_db(self, source_path: str):
         """Migrate data from tag_mappings.db"""
@@ -262,10 +408,10 @@ class KnowledgeDatabase:
             
             source_conn.close()
             self.conn.commit()
-            print(f"✅ Migrated {len(mappings)} tag mappings")
+            debug(f"✅ Migrated {len(mappings)} tag mappings")
             
         except Exception as e:
-            print(f"❌ Error migrating tag_mappings.db: {e}")
+            error(f"❌ Error migrating tag_mappings.db: {e}")
     
     def _migrate_hardcoded_vendor_words(self):
         """Migrate hardcoded vendor specific words from database_vendor_extractor.py"""
@@ -295,10 +441,10 @@ class KnowledgeDatabase:
                 ''', (word, vendor_name, 3, 'start'))
             
             self.conn.commit()
-            print(f"✅ Migrated {len(vendor_specific_words)} vendor specific words")
+            debug(f"✅ Migrated {len(vendor_specific_words)} vendor specific words")
             
         except Exception as e:
-            print(f"❌ Error migrating hardcoded vendor words: {e}")
+            error(f"❌ Error migrating hardcoded vendor words: {e}")
     
     def _migrate_tag_mappings_to_new_structure(self):
         """Migrate existing tag mappings from old structure to new simplified structure"""
@@ -306,7 +452,7 @@ class KnowledgeDatabase:
             # Check if we have old structure data in backup
             backup_path = "patchio_knowledge_backup.db"
             if os.path.exists(backup_path):
-                print(f"📦 Migrating from backup database: {backup_path}")
+                debug(f"📦 Migrating from backup database: {backup_path}")
                 
                 # Connect to backup database
                 backup_conn = sqlite3.connect(backup_path)
@@ -357,12 +503,12 @@ class KnowledgeDatabase:
                     ))
                 
                 self.conn.commit()
-                print(f"✅ Migrated {len(pattern_groups)} tag mappings to new structure")
+                debug(f"✅ Migrated {len(pattern_groups)} tag mappings to new structure")
             else:
-                print("ℹ️ No backup database found, skipping tag mappings migration")
+                warning("ℹ️ No backup database found, skipping tag mappings migration")
             
         except Exception as e:
-            print(f"❌ Error migrating tag mappings to new structure: {e}")
+            error(f"❌ Error migrating tag mappings to new structure: {e}")
     
     def get_vendor_library_mapping(self, file_path: str) -> Tuple[Optional[str], Optional[str]]:
         """Get vendor and library for a file path"""
@@ -396,7 +542,7 @@ class KnowledgeDatabase:
             return None, None
             
         except Exception as e:
-            print(f"❌ Error getting vendor/library mapping: {e}")
+            error(f"❌ Error getting vendor/library mapping: {e}")
             return None, None
     
     def get_tag_mappings(self, tag_type: str = None) -> List[Tuple[str, str, str, str, str, float, bool]]:
@@ -420,7 +566,7 @@ class KnowledgeDatabase:
             return self.cursor.fetchall()
             
         except Exception as e:
-            print(f"❌ Error getting tag mappings: {e}")
+            error(f"❌ Error getting tag mappings: {e}")
             return []
     
     def get_library_profile(self, library_name: str) -> Optional[Dict[str, Any]]:
@@ -454,7 +600,7 @@ class KnowledgeDatabase:
             return profile
             
         except Exception as e:
-            print(f"❌ Error getting library profile: {e}")
+            error(f"❌ Error getting library profile: {e}")
             return None
     
     def add_tag_mapping(self, pattern: str, instrument = None, genre = None, 
@@ -499,7 +645,7 @@ class KnowledgeDatabase:
             return True
             
         except Exception as e:
-            print(f"❌ Error adding tag mapping: {e}")
+            error(f"❌ Error adding tag mapping: {e}")
             return False
     
     def _parse_tag_value(self, value):
@@ -528,7 +674,7 @@ class KnowledgeDatabase:
             return True
             
         except Exception as e:
-            print(f"❌ Error adding vendor/library mapping: {e}")
+            error(f"❌ Error adding vendor/library mapping: {e}")
             return False
     
     def add_vendor_specific_word(self, word: str, vendor_name: str, 
@@ -545,7 +691,7 @@ class KnowledgeDatabase:
             return True
             
         except Exception as e:
-            print(f"❌ Error adding vendor specific word: {e}")
+            error(f"❌ Error adding vendor specific word: {e}")
             return False
     
     def get_vendor_specific_words(self) -> List[Tuple[str, str, int, str]]:
@@ -559,7 +705,7 @@ class KnowledgeDatabase:
             return self.cursor.fetchall()
             
         except Exception as e:
-            print(f"❌ Error getting vendor specific words: {e}")
+            error(f"❌ Error getting vendor specific words: {e}")
             return []
     
     def find_vendor_by_specific_word(self, library_name: str) -> Optional[str]:
@@ -593,7 +739,7 @@ class KnowledgeDatabase:
             return None
             
         except Exception as e:
-            print(f"❌ Error finding vendor by specific word: {e}")
+            error(f"❌ Error finding vendor by specific word: {e}")
             return None
     
     def export_to_json(self, output_path: str):
@@ -641,11 +787,11 @@ class KnowledgeDatabase:
             with open(output_path, 'w', encoding='utf-8') as f:
                 json.dump(knowledge, f, indent=2, ensure_ascii=False)
             
-            print(f"✅ Exported knowledge to {output_path}")
+            debug(f"✅ Exported knowledge to {output_path}")
             return True
             
         except Exception as e:
-            print(f"❌ Error exporting knowledge: {e}")
+            error(f"❌ Error exporting knowledge: {e}")
             return False
     
     def import_from_json(self, json_path: str):
@@ -654,7 +800,7 @@ class KnowledgeDatabase:
             with open(json_path, 'r', encoding='utf-8') as f:
                 config = json.load(f)
             
-            print(f"✅ Loaded configuration from: {json_path}")
+            debug(f"✅ Loaded configuration from: {json_path}")
             
             # Temporarily disable foreign key constraints for import
             self.cursor.execute('PRAGMA foreign_keys = OFF')
@@ -675,7 +821,7 @@ class KnowledgeDatabase:
                         vendor.get('default_mood', ''),
                         vendor.get('default_character', '')
                     ))
-                print(f"✅ Imported {len(config['vendor_profiles'])} vendor profiles")
+                debug(f"✅ Imported {len(config['vendor_profiles'])} vendor profiles")
             
             # Import library profiles
             if 'library_profiles' in config:
@@ -685,7 +831,7 @@ class KnowledgeDatabase:
                     vendor_result = self.cursor.fetchone()
                     
                     if not vendor_result:
-                        print(f"⚠️ Warning: Vendor '{library['vendor_name']}' not found for library '{library['library_name']}'")
+                        warning(f"⚠️ Warning: Vendor '{library['vendor_name']}' not found for library '{library['library_name']}'")
                         continue
                     
                     vendor_id = vendor_result[0]
@@ -710,7 +856,7 @@ class KnowledgeDatabase:
                         character_tags,
                         format_tags
                     ))
-                print(f"✅ Imported {len(config['library_profiles'])} library profiles")
+                debug(f"✅ Imported {len(config['library_profiles'])} library profiles")
             
             # Import tag mappings
             if 'tag_mappings' in config:
@@ -743,7 +889,7 @@ class KnowledgeDatabase:
                         mapping.get('is_regex', False),
                         library_id
                     ))
-                print(f"✅ Imported {len(config['tag_mappings'])} tag mappings")
+                debug(f"✅ Imported {len(config['tag_mappings'])} tag mappings")
             
             # Import vendor specific words
             if 'vendor_specific_words' in config:
@@ -751,7 +897,7 @@ class KnowledgeDatabase:
                     # Check if vendor exists before inserting
                     self.cursor.execute('SELECT vendor_name FROM vendor_profiles WHERE vendor_name = ?', (word_data['vendor_name'],))
                     if not self.cursor.fetchone():
-                        print(f"⚠️ Warning: Vendor '{word_data['vendor_name']}' not found for word '{word_data['word']}', skipping")
+                        warning(f"⚠️ Warning: Vendor '{word_data['vendor_name']}' not found for word '{word_data['word']}', skipping")
                         continue
                     
                     self.cursor.execute('''
@@ -764,17 +910,17 @@ class KnowledgeDatabase:
                         word_data.get('min_length', 3),
                         word_data.get('match_position', 'start')
                     ))
-                print(f"✅ Imported {len(config['vendor_specific_words'])} vendor specific words")
+                debug(f"✅ Imported {len(config['vendor_specific_words'])} vendor specific words")
             
             # Re-enable foreign key constraints
             self.cursor.execute('PRAGMA foreign_keys = ON')
             
             self.conn.commit()
-            print("✅ Configuration import completed successfully!")
+            info("✅ Configuration import completed successfully!")
             return True
             
         except Exception as e:
-            print(f"❌ Error importing configuration: {e}")
+            error(f"❌ Error importing configuration: {e}")
             # Re-enable foreign key constraints even if there's an error
             try:
                 self.cursor.execute('PRAGMA foreign_keys = ON')
@@ -808,7 +954,7 @@ class KnowledgeDatabase:
             return stats
             
         except Exception as e:
-            print(f"❌ Error getting database stats: {e}")
+            error(f"❌ Error getting database stats: {e}")
             return {}
     
     # Vendor/Library Extraction Methods (merged from database_vendor_extractor.py)
@@ -819,7 +965,7 @@ class KnowledgeDatabase:
             self.cursor.execute('SELECT vendor_name FROM vendor_profiles ORDER BY vendor_name')
             return [row[0] for row in self.cursor.fetchall()]
         except Exception as e:
-            print(f"❌ Error getting vendors: {e}")
+            error(f"❌ Error getting vendors: {e}")
             return []
     
     def find_library_mapping(self, path: str) -> Optional[Tuple[str, str]]:
@@ -1016,11 +1162,11 @@ class KnowledgeDatabase:
             return "Unknown Vendor"
             
         except Exception as e:
-            print(f"⚠️ Error in original vendor extraction: {e}")
+            error(f"⚠️ Error in original vendor extraction: {e}")
             return "Unknown Vendor"
     
     def _extract_library_original_patchio_logic(self, path: str) -> str:
-        """Extract library using original PatchIO logic"""
+        """Extract library using FileModel as single source of truth"""
         try:
             # Import file model for library extraction
             from models.file_model import FileModel
@@ -1030,13 +1176,12 @@ class KnowledgeDatabase:
             settings_model = UserSettingsModel()
             file_model = FileModel(settings_model)
             
-            # Use the original library extraction logic
+            # Use FileModel as single source of truth
             library = file_model.extract_library_info(path)
-            
             return library if library else "Unknown Library"
             
         except Exception as e:
-            print(f"⚠️ Error in original library extraction: {e}")
+            error(f"⚠️ Error in library extraction: {e}")
             return "Unknown Library"
     
     def add_vendor(self, vendor_name: str, aliases: List[str] = None) -> bool:
@@ -1049,7 +1194,7 @@ class KnowledgeDatabase:
             self.conn.commit()
             return True
         except Exception as e:
-            print(f"❌ Error adding vendor {vendor_name}: {e}")
+            error(f"❌ Error adding vendor {vendor_name}: {e}")
             return False
     
     def add_library(self, library_name: str, vendor_name: str, aliases: List[str] = None) -> bool:
@@ -1075,7 +1220,7 @@ class KnowledgeDatabase:
             self.conn.commit()
             return True
         except Exception as e:
-            print(f"❌ Error adding library {library_name}: {e}")
+            error(f"❌ Error adding library {library_name}: {e}")
             return False
 
     def close(self):
@@ -1090,12 +1235,12 @@ def main():
     import sys
     
     if len(sys.argv) < 2:
-        print("Usage: python3 knowledge_database.py [init|migrate|stats|export|import]")
-        print("  init     - Initialize database schema")
-        print("  migrate  - Migrate from existing databases")
-        print("  stats    - Show database statistics")
-        print("  export   - Export database to JSON")
-        print("  import   - Import database from JSON")
+        debug("Usage: python3 knowledge_database.py [init|migrate|stats|export|import]")
+        debug("  init     - Initialize database schema")
+        debug("  migrate  - Migrate from existing databases")
+        debug("  stats    - Show database statistics")
+        debug("  export   - Export database to JSON")
+        debug("  import   - Import database from JSON")
         return
     
     command = sys.argv[1]
@@ -1103,14 +1248,14 @@ def main():
     
     try:
         if command == "init":
-            print("✅ Knowledge database initialized")
+            debug("✅ Knowledge database initialized")
         elif command == "migrate":
             knowledge_db.migrate_from_existing_databases()
         elif command == "stats":
             stats = knowledge_db.get_database_stats()
-            print("📊 Knowledge Database Statistics:")
+            debug("📊 Knowledge Database Statistics:")
             for key, value in stats.items():
-                print(f"  {key}: {value}")
+                debug(f"  {key}: {value}")
         elif command == "export":
             output_path = sys.argv[2] if len(sys.argv) > 2 else "utils/database/database_config.json"
             knowledge_db.export_to_json(output_path)
@@ -1118,7 +1263,7 @@ def main():
             json_path = sys.argv[2] if len(sys.argv) > 2 else "utils/database/database_config.json"
             knowledge_db.import_from_json(json_path)
         else:
-            print(f"Unknown command: {command}")
+            debug(f"Unknown command: {command}")
     
     finally:
         knowledge_db.close()

@@ -485,6 +485,10 @@ class MVCPatchIOLoader:
         
         debug("🚀 Starting PatchIO with MVC architecture")
         
+        # Check for first-time setup after a brief delay
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(500, self.main_controller.handle_first_time_setup)
+        
         # Start the application
         return self.app.exec()
 

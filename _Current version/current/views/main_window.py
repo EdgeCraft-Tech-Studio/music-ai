@@ -26,6 +26,7 @@ from settings.core_settings import (
     DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT,
     ICON_PATHS, ICON_SIZES
 )
+from utils.logger import debug, info, warning, error, critical
 
 class MainWindowView(QMainWindow):
     """Main window view - handles UI display and user interactions"""
@@ -143,7 +144,7 @@ class MainWindowView(QMainWindow):
         
         # Install global event filter for escape key handling
         self.installEventFilter(self)
-        print("🔍 Global event filter installed for escape key")
+        debug("🔍 Global event filter installed for escape key")
         
         # Setup cancel search button functionality
         self.setup_cancel_search_button_behavior()
@@ -169,14 +170,14 @@ class MainWindowView(QMainWindow):
     def setup_results_area(self):
         """Setup the results area with initial content"""
         if not self.results_area:
-            print("⚠️ Results area not found")
+            warning("⚠️ Results area not found")
             return
 
         try:
             from PySide6.QtWidgets import QLabel, QVBoxLayout
             from PySide6.QtCore import Qt
 
-            print(f"🔍 Setting up results area: {self.results_area}")
+            debug(f"🔍 Setting up results area: {self.results_area}")
 
             # Create initial label (like the original)
             self.results_label = QLabel("Search results will appear here\n\nTry searching for files!")
@@ -189,10 +190,10 @@ class MainWindowView(QMainWindow):
             # Set the label as the widget of the scroll area
             self.results_area.setWidget(self.results_label)
 
-            print("✅ Results area setup completed")
+            info("✅ Results area setup completed")
 
         except Exception as e:
-            print(f"⚠️ Error setting up results area: {e}")
+            error(f"⚠️ Error setting up results area: {e}")
             import traceback
             traceback.print_exc()
     
@@ -323,11 +324,11 @@ class MainWindowView(QMainWindow):
             # Set the tree widget as the widget of the scroll area
             self.results_area.setWidget(self.results_tree)
 
-            print("✅ Tree widget created")
+            debug("✅ Tree widget created")
             return self.results_tree
 
         except Exception as e:
-            print(f"⚠️ Error creating tree widget: {e}")
+            error(f"⚠️ Error creating tree widget: {e}")
             import traceback
             traceback.print_exc()
             return None
@@ -349,7 +350,7 @@ class MainWindowView(QMainWindow):
         elif event.type() == QEvent.KeyPress:
             # Handle escape key for search cancellation (global)
             if event.key() == Qt.Key_Escape:
-                print("🔍 Escape key pressed - cancelling search")
+                debug("🔍 Escape key pressed - cancelling search")
                 if hasattr(self, 'controller') and self.controller:
                     # Call the search controller's cancel method
                     self.controller.search_controller.on_search_cancelled()
@@ -454,7 +455,7 @@ class MainWindowView(QMainWindow):
             
             # Join all parts with AND
             query = " AND ".join(query_parts)
-            print(f"🔍 get_search_text() - combined search and filters (AND logic): '{query}'")
+            debug(f"🔍 get_search_text() - combined search and filters (AND logic): '{query}'")
             return query
         else:
             # Fallback to original method if controller not available
@@ -513,7 +514,7 @@ class MainWindowView(QMainWindow):
                         parent_layout = search_bar_parent.layout()
                         if parent_layout:
                             parent_layout.addWidget(self.advanced_search_input)
-                            print(f"🔍 Re-added advanced search input to layout")
+                            debug(f"🔍 Re-added advanced search input to layout")
                 else:
                     # If it has a parent but was removed, re-add it
                     search_bar_parent = self.search_bar_frame.parent()
@@ -521,7 +522,7 @@ class MainWindowView(QMainWindow):
                         parent_layout = search_bar_parent.layout()
                         if parent_layout and self.advanced_search_input not in [parent_layout.itemAt(i).widget() for i in range(parent_layout.count())]:
                             parent_layout.addWidget(self.advanced_search_input)
-                            print(f"🔍 Re-added advanced search input to layout (was missing)")
+                            warning(f"🔍 Re-added advanced search input to layout (was missing)")
             
             # Show all child widgets of the advanced search input
             for field in self.advanced_search_input.search_fields:
@@ -533,10 +534,10 @@ class MainWindowView(QMainWindow):
             self.advanced_search_input.setVisible(True)
             self.advanced_search_input.setMinimumHeight(120)
             self.advanced_search_input.updateGeometry()  # Force layout update
-            print(f"🔍 Showed advanced search input and all child widgets")
-            print(f"🔍 Advanced search input visible: {self.advanced_search_input.isVisible()}")
-            print(f"🔍 Advanced search input parent: {self.advanced_search_input.parent()}")
-            print(f"🔍 Advanced search input size: {self.advanced_search_input.size()}")
+            debug(f"🔍 Showed advanced search input and all child widgets")
+            debug(f"🔍 Advanced search input visible: {self.advanced_search_input.isVisible()}")
+            debug(f"🔍 Advanced search input parent: {self.advanced_search_input.parent()}")
+            debug(f"🔍 Advanced search input size: {self.advanced_search_input.size()}")
             
             # Set the active search input
             self.search_input = self.advanced_search_input
@@ -551,7 +552,7 @@ class MainWindowView(QMainWindow):
                     self.original_search_input.textChanged.disconnect()
                 except:
                     pass  # No connections to disconnect
-                print(f"🔍 Disconnected signals from original search input")
+                debug(f"🔍 Disconnected signals from original search input")
             
         else:
             # Hide the advanced search input completely
@@ -568,17 +569,17 @@ class MainWindowView(QMainWindow):
                     parent_layout = self.advanced_search_input.parent().layout()
                     if parent_layout:
                         parent_layout.removeWidget(self.advanced_search_input)
-                        print(f"🔍 Removed advanced search input from layout")
-                print(f"🔍 Hidden advanced search input and all child widgets")
+                        info(f"🔍 Removed advanced search input from layout")
+                debug(f"🔍 Hidden advanced search input and all child widgets")
             
             # Show the search bar frame
             self.search_bar_frame.setVisible(True)
-            print(f"🔍 Restored search bar frame")
+            debug(f"🔍 Restored search bar frame")
             
             # Use the original search input (bubble search input) that was set up initially
             if hasattr(self, 'original_search_input') and self.original_search_input:
                 self.search_input = self.original_search_input
-                print(f"🔍 Restored original search input: {self.original_search_input}")
+                debug(f"🔍 Restored original search input: {self.original_search_input}")
                 
                 # Reconnect signals for the bubble search input
                 self.reconnect_search_input_signals()
@@ -593,12 +594,12 @@ class MainWindowView(QMainWindow):
                 if bubble_search_input:
                     # Set the active search input to the bubble search input
                     self.search_input = bubble_search_input
-                    print(f"🔍 Found and set bubble search input: {bubble_search_input}")
+                    debug(f"🔍 Found and set bubble search input: {bubble_search_input}")
                     
                     # Reconnect signals for the bubble search input
                     self.reconnect_search_input_signals()
                 else:
-                    print(f"⚠️ Could not find bubble search input in search bar frame")
+                    warning(f"⚠️ Could not find bubble search input in search bar frame")
                     # Fallback to any search input in the frame
                     if self.search_input:
                         self.search_input.setVisible(True)
@@ -618,7 +619,7 @@ class MainWindowView(QMainWindow):
         if not self.search_input:
             return
         
-        print(f"🔍 Reconnecting signals for search input: {self.search_input}")
+        debug(f"🔍 Reconnecting signals for search input: {self.search_input}")
         
         # Disconnect any existing connections to avoid duplicates
         try:
@@ -635,11 +636,11 @@ class MainWindowView(QMainWindow):
         self.search_input.returnPressed.connect(
             self.controller.search_controller.on_search_triggered
         )
-        print(f"🔍 Reconnected returnPressed signal")
+        debug(f"🔍 Reconnected returnPressed signal")
         
         # Reconnect textChanged signal for start search button
         self.search_input.textChanged.connect(self.on_search_text_changed_for_start_button)
-        print(f"🔍 Reconnected textChanged signal")
+        debug(f"🔍 Reconnected textChanged signal")
         
         # Update search tooltip
         self.update_search_tooltip()
@@ -649,7 +650,7 @@ class MainWindowView(QMainWindow):
             current_text = self.search_input.get_text()
         else:
             current_text = self.search_input.text()
-        print(f"🔍 Forcing textChanged signal with current text: '{current_text}'")
+        debug(f"🔍 Forcing textChanged signal with current text: '{current_text}'")
         self.search_input.textChanged.emit(current_text)
     
     def update_start_search_button_visibility(self):
@@ -662,12 +663,12 @@ class MainWindowView(QMainWindow):
                 has_text = len(self.search_input.text().strip()) > 0
             # Only show start search button if there's text AND no search is in progress
             should_show = has_text and not self.is_searching
-            print(f"🔍 Force update start search button: has_text={has_text}, is_searching={self.is_searching}, should_show={should_show}")
+            debug(f"🔍 Force update start search button: has_text={has_text}, is_searching={self.is_searching}, should_show={should_show}")
             self.start_search_button.setVisible(should_show)
             if should_show:
                 # Position the start search button consistently
                 self.position_search_button(self.start_search_button, is_cancel_button=False)
-                print(f"🔍 Force positioned start search button")
+                debug(f"🔍 Force positioned start search button")
     
     def clear_results(self):
         """Clear the results tree"""
@@ -701,12 +702,12 @@ class MainWindowView(QMainWindow):
     def show_status_message(self, message: str):
         """Show status message to user"""
         # This could be implemented with a status bar
-        print(f"Status: {message}")
+        debug(f"Status: {message}")
     
     def show_error_message(self, message: str):
         """Show error message to user"""
         # This could be implemented with a message box
-        print(f"Error: {message}")
+        debug(f"Error: {message}")
     
     def setup_status_bar(self):
         """Setup status bar with progress indicators"""
@@ -716,7 +717,7 @@ class MainWindowView(QMainWindow):
         # Create status bar directly (since we're a QMainWindow)
         self.status_bar = self.statusBar()
         if not self.status_bar:
-            print("⚠️ Failed to create status bar")
+            error("⚠️ Failed to create status bar")
             return
         
         # Make sure status bar is visible and styled
@@ -745,7 +746,7 @@ class MainWindowView(QMainWindow):
     def update_status_display(self, message: str, state: str = "ready"):
         """Update status display with message and state"""
         if not hasattr(self, 'status_label'):
-            print(f"Status: {message}")
+            debug(f"Status: {message}")
             return
         
         # Update message
@@ -951,22 +952,22 @@ class MainWindowView(QMainWindow):
         
         button.move(button_x, button_y)
         button.raise_()  # Ensure button is on top
-        print(f"🔍 Positioned {'cancel' if is_cancel_button else 'start search'} button at ({button_x}, {button_y})")
+        debug(f"🔍 Positioned {'cancel' if is_cancel_button else 'start search'} button at ({button_x}, {button_y})")
     
     def setup_cancel_search_button_behavior(self):
         """Setup cancel search button behavior (ChatGPT style)"""
-        print(f"🔍 Setting up cancel search button behavior:")
-        print(f"  search_input: {self.search_input}")
-        print(f"  cancel_search_button: {self.clear_button}")
+        debug(f"🔍 Setting up cancel search button behavior:")
+        debug(f"  search_input: {self.search_input}")
+        debug(f"  cancel_search_button: {self.clear_button}")
         
         if not self.search_input or not self.clear_button:
-            print("⚠️ Missing search_input or cancel_search_button")
+            warning("⚠️ Missing search_input or cancel_search_button")
             return
         
         try:
             # Initially hide the cancel search button
             self.clear_button.setVisible(False)
-            print(f"🔍 Cancel search button initially hidden")
+            debug(f"🔍 Cancel search button initially hidden")
             
             # Use QToolButton for icon-only behavior with pointing hand cursor
             if isinstance(self.clear_button, QToolButton):
@@ -1040,13 +1041,13 @@ class MainWindowView(QMainWindow):
                     """
                     self.clear_button.setStyleSheet(css)
                     
-                    print(f"✅ Cancel search icon loaded from {icon_path} with size {icon_size}")
+                    debug(f"✅ Cancel search icon loaded from {icon_path} with size {icon_size}")
                 else:
-                    print(f"⚠️ Cancel search icon not found at {icon_path}")
+                    warning(f"⚠️ Cancel search icon not found at {icon_path}")
                     # Fallback to text
                     self.clear_button.setText("×")
             except Exception as e:
-                print(f"⚠️ Error loading cancel search icon: {e}")
+                error(f"⚠️ Error loading cancel search icon: {e}")
                 # Fallback to text
                 self.clear_button.setText("×")
             
@@ -1062,20 +1063,20 @@ class MainWindowView(QMainWindow):
             
             # Search input events are handled by the search controller
             # (connections are set up in MVC loader)
-            print(f"🔍 Return pressed handled by controller")
+            debug(f"🔍 Return pressed handled by controller")
             
             # Cancel button visibility is managed by search state, not text changes
             # (cancel button is only visible when search is ongoing)
-            print(f"🔍 Cancel button visibility managed by search state only")
+            debug(f"🔍 Cancel button visibility managed by search state only")
             
             # Also connect to start search button handler
             self.search_input.textChanged.connect(self.on_search_text_changed_for_start_button)
-            print(f"🔍 Start search text changed connected")
+            debug(f"🔍 Start search text changed connected")
             
-            print("✅ Cancel search button behavior setup completed")
+            info("✅ Cancel search button behavior setup completed")
             
         except Exception as e:
-            print(f"⚠️ Error setting up clear button behavior: {e}")
+            error(f"⚠️ Error setting up clear button behavior: {e}")
             import traceback
             traceback.print_exc()
     
@@ -1090,12 +1091,12 @@ class MainWindowView(QMainWindow):
     
     def setup_start_search_button_behavior(self):
         """Setup start search button behavior"""
-        print(f"🔍 Setting up start search button behavior:")
-        print(f"  search_input: {self.search_input}")
-        print(f"  start_search_button: {self.start_search_button}")
+        debug(f"🔍 Setting up start search button behavior:")
+        debug(f"  search_input: {self.search_input}")
+        debug(f"  start_search_button: {self.start_search_button}")
         
         if not self.search_input or not self.start_search_button:
-            print("⚠️ Missing search_input or start_search_button")
+            warning("⚠️ Missing search_input or start_search_button")
             return
         
         try:
@@ -1178,12 +1179,12 @@ class MainWindowView(QMainWindow):
                     """
                     self.start_search_button.setStyleSheet(css)
                     
-                    print(f"✅ Start search icon loaded from {icon_path} with size {icon_size}")
+                    debug(f"✅ Start search icon loaded from {icon_path} with size {icon_size}")
                 else:
-                    print(f"⚠️ Start search icon not found at {icon_path}")
+                    warning(f"⚠️ Start search icon not found at {icon_path}")
                     # No fallback - rely on icon only
             except Exception as e:
-                print(f"⚠️ Error loading start search icon: {e}")
+                error(f"⚠️ Error loading start search icon: {e}")
                 # No fallback - rely on icon only
             
             # Initially hide the start search button
@@ -1195,18 +1196,18 @@ class MainWindowView(QMainWindow):
             # Connect search input text changes to show/hide start search button
             if self.search_input:
                 self.search_input.textChanged.connect(self.on_search_text_changed_for_start_button)
-                print(f"🔍 Start search text changed connected")
+                debug(f"🔍 Start search text changed connected")
             
-            print("✅ Start search button behavior setup completed")
+            info("✅ Start search button behavior setup completed")
             
         except Exception as e:
-            print(f"⚠️ Error setting up start search button behavior: {e}")
+            error(f"⚠️ Error setting up start search button behavior: {e}")
             import traceback
             traceback.print_exc()
     
     def on_start_search_clicked(self):
         """Handle start search button click"""
-        print("🔍 Start search button clicked!")
+        debug("🔍 Start search button clicked!")
         # Trigger search
         if hasattr(self, 'controller') and self.controller:
             # Call the search controller's trigger method
@@ -1222,22 +1223,22 @@ class MainWindowView(QMainWindow):
                 has_text = len(self.search_input.text().strip()) > 0
             # Only show start search button if there's text AND no search is in progress
             should_show = has_text and not self.is_searching
-            print(f"🔍 Start search button: has_text={has_text}, is_searching={self.is_searching}, should_show={should_show}")
+            debug(f"🔍 Start search button: has_text={has_text}, is_searching={self.is_searching}, should_show={should_show}")
             self.start_search_button.setVisible(should_show)
             if should_show:
                 # Position the start search button consistently
                 self.position_search_button(self.start_search_button, is_cancel_button=False)
-                print(f"🔍 Positioned start search button")
+                debug(f"🔍 Positioned start search button")
             else:
-                print(f"🔍 Hidden start search button")
+                debug(f"🔍 Hidden start search button")
     
     def setup_advanced_filters_button(self):
         """Setup Advanced Filters button below the search bar"""
-        print("🔍 Setting up Advanced Filters button")
+        debug("🔍 Setting up Advanced Filters button")
         
         # Find the search bar frame
         if not self.search_bar_frame:
-            print("⚠️ Search bar frame not found")
+            warning("⚠️ Search bar frame not found")
             return
         
         # Create the Advanced Filters button
@@ -1300,11 +1301,11 @@ class MainWindowView(QMainWindow):
                 search_bar_index = parent_layout.indexOf(self.search_bar_frame)
                 if search_bar_index >= 0:
                     parent_layout.insertWidget(search_bar_index + 1, self.advanced_filters_button)
-                    print(f"✅ Advanced Filters button added to layout at index {search_bar_index + 1}")
+                    debug(f"✅ Advanced Filters button added to layout at index {search_bar_index + 1}")
                 else:
                     # Fallback: add to the end
                     parent_layout.addWidget(self.advanced_filters_button)
-                    print(f"✅ Advanced Filters button added to layout (fallback)")
+                    debug(f"✅ Advanced Filters button added to layout (fallback)")
                 
                 # Align the button to the left (same as search bar)
                 parent_layout.setAlignment(self.advanced_filters_button, Qt.AlignmentFlag.AlignLeft)
@@ -1312,19 +1313,19 @@ class MainWindowView(QMainWindow):
                 # Connect the button click event
                 self.advanced_filters_button.clicked.connect(self.on_advanced_filters_clicked)
                 
-                print("✅ Advanced Filters button setup completed")
+                info("✅ Advanced Filters button setup completed")
             else:
-                print("⚠️ Parent layout not found")
+                warning("⚠️ Parent layout not found")
         else:
-            print("⚠️ Search bar parent not found")
+            warning("⚠️ Search bar parent not found")
     
     def on_advanced_filters_clicked(self):
         """Handle Advanced Filters button click"""
-        print("🔍 Advanced Filters button clicked!")
+        debug("🔍 Advanced Filters button clicked!")
         
         # Toggle the button state
         is_checked = self.advanced_filters_button.isChecked()
-        print(f"🔍 Advanced Filters button state: {is_checked}")
+        debug(f"🔍 Advanced Filters button state: {is_checked}")
         
         # Update button text based on state
         if is_checked:

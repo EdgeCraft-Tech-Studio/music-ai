@@ -16,6 +16,7 @@ from datetime import datetime
 from models.file_model import FileModel
 from models.user_settings_model import UserSettingsModel
 from settings.core_settings import FILE_TYPE_MAPPINGS
+from utils.logger import debug, info, warning, error, critical
 
 class DatabaseIndexer:
     """Standalone SQLite database indexer for PatchIO file system"""
@@ -41,26 +42,26 @@ class DatabaseIndexer:
             from settings.core_settings import DEFAULT_EXTENSIONS
             self.allowed_extensions = set(DEFAULT_EXTENSIONS)
         
-        print(f"📁 Indexing files with extensions: {sorted(self.allowed_extensions)}")
-        print(f"📦 Batch size: {self.batch_size} files per batch")
+        debug(f"📁 Indexing files with extensions: {sorted(self.allowed_extensions)}")
+        debug(f"📦 Batch size: {self.batch_size} files per batch")
         
         # Initialize automatic tagger (single instance for performance)
         self.automatic_tagger = None
         try:
             from utils.database.automatic_tagger import AutomaticTagger
             self.automatic_tagger = AutomaticTagger()
-            print("✅ Automatic tagger initialized")
+            debug("✅ Automatic tagger initialized")
         except ImportError:
-            print("⚠️ Automatic tagger not available - skipping automatic tagging")
+            warning("⚠️ Automatic tagger not available - skipping automatic tagging")
         
         # Initialize knowledge database for vendor extraction (single instance for performance)
         self.knowledge_db = None
         try:
             from utils.database.knowledge_database import KnowledgeDatabase
             self.knowledge_db = KnowledgeDatabase("patchio_knowledge.db")
-            print("✅ Knowledge database initialized for vendor extraction")
+            debug("✅ Knowledge database initialized for vendor extraction")
         except ImportError:
-            print("⚠️ Knowledge database not available - using fallback method")
+            warning("⚠️ Knowledge database not available - using fallback method")
         
         # Initialize database
         self._init_database()
@@ -116,10 +117,10 @@ class DatabaseIndexer:
             for column_name, column_type in new_columns:
                 try:
                     self.cursor.execute(f'ALTER TABLE files ADD COLUMN {column_name} {column_type}')
-                    print(f"✅ Added {column_name} column to existing database")
+                    debug(f"✅ Added {column_name} column to existing database")
                 except sqlite3.OperationalError as e:
                     if 'duplicate column name' not in str(e):
-                        print(f"⚠️ Warning: Could not add {column_name} column: {e}")
+                        warning(f"⚠️ Warning: Could not add {column_name} column: {e}")
             
             # Create indexes for better performance
             self.cursor.execute('CREATE INDEX IF NOT EXISTS idx_files_path ON files(path)')
@@ -133,10 +134,10 @@ class DatabaseIndexer:
             self.cursor.execute('CREATE INDEX IF NOT EXISTS idx_files_format ON files(format)')
             
             self.conn.commit()
-            print(f"✅ Database initialized: {self.db_path}")
+            debug(f"✅ Database initialized: {self.db_path}")
             
         except Exception as e:
-            print(f"❌ Error initializing database: {e}")
+            error(f"❌ Error initializing database: {e}")
             raise
     
     def _get_file_type(self, file_path: str) -> str:
@@ -195,6 +196,37 @@ class DatabaseIndexer:
         else:
             return os.path.dirname(file_path)
     
+    def _batch_update_folder_files(self, library_folder: str, vendor: str, library: str, project: str = None):
+        """Batch update all files in a folder with the same vendor/library/project"""
+        try:
+            # Get all files in the database that are in this library folder
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Find all files that start with this library folder path
+            cursor.execute("""
+                SELECT path FROM files 
+                WHERE path LIKE ? AND (vendor IS NULL OR vendor = '' OR vendor = 'Unknown Vendor')
+            """, (library_folder + '%',))
+            
+            files_to_update = cursor.fetchall()
+            
+            if files_to_update:
+                # Batch update all files in this folder
+                cursor.execute("""
+                    UPDATE files 
+                    SET vendor = ?, library = ?, project = ?
+                    WHERE path LIKE ? AND (vendor IS NULL OR vendor = '' OR vendor = 'Unknown Vendor')
+                """, (vendor, library, project, library_folder + '%'))
+                
+                conn.commit()
+                debug(f"🚀 Batch updated {len(files_to_update)} files in folder: {library_folder} -> {library}")
+            
+            conn.close()
+            
+        except Exception as e:
+            error(f"⚠️ Error batch updating folder files: {e}")
+    
     def _get_file_metadata(self, file_path: str, file_name: str) -> Dict[str, Any]:
         """Extract metadata from file using enhanced vendor/library extraction and automatic tagging"""
         try:
@@ -207,30 +239,38 @@ class DatabaseIndexer:
             
             # Check folder cache first (major performance optimization)
             if library_folder in self.folder_cache:
-                vendor, library = self.folder_cache[library_folder]
+                vendor, library, project = self.folder_cache[library_folder]
             else:
-                # Extract vendor and library information (expensive operation)
-                if self.knowledge_db:
-                    try:
-                        vendor, library = self.knowledge_db.extract_vendor_library(file_path)
-                    except Exception as e:
-                        print(f"⚠️ Error extracting vendor/library for {file_path}: {e}")
-                        library = self.file_model.extract_library_info(file_path)
-                        vendor = "Unknown Vendor"
-                else:
-                    # Fallback to original method if knowledge database not available
+                # 🚀 NEW: Extract vendor and library using V3 (fast pattern-based)
+                # Replaces old knowledge_db.extract_vendor_library() (slow method)
+                try:
+                    from utils.database.library_extractor_v3 import LibraryExtractorV3
+                    
+                    # Create or reuse V3 extractor (uses shared vendor cache)
+                    if not hasattr(self, '_v3_extractor'):
+                        self._v3_extractor = LibraryExtractorV3(use_knowledge_db=True)
+                    
+                    vendor, library, project = self._v3_extractor.extract_vendor_library(file_path)
+                    
+                except Exception as e:
+                    error(f"⚠️ V3 extraction error for {file_path}: {e}")
+                    # Fallback to file_model (which also uses V3 now)
                     library = self.file_model.extract_library_info(file_path)
                     vendor = "Unknown Vendor"
+                    project = None
                 
                 # Cache the result for this library folder (all files in same library will reuse this)
-                self.folder_cache[library_folder] = (vendor, library)
+                self.folder_cache[library_folder] = (vendor, library, project)
+                
+                # Batch update all other files in this folder with the same library/project
+                self._batch_update_folder_files(library_folder, vendor, library, project)
             
             # Get automatic tags using the tagging system
             if self.automatic_tagger:
                 try:
                     tag_result = self.automatic_tagger.tag_file(file_path, library, vendor)
                 except Exception as e:
-                    print(f"⚠️ Error tagging file {file_path}: {e}")
+                    error(f"⚠️ Error tagging file {file_path}: {e}")
                     tag_result = type('TagResult', (), {
                         'instrument': [], 'genre': [], 'mood': [], 'format': [], 'confidence': 0.0
                     })()
@@ -253,7 +293,7 @@ class DatabaseIndexer:
                 'format': json.dumps(tag_result.format) if tag_result.format else ''
             }
         except Exception as e:
-            print(f"⚠️ Error extracting metadata for {file_path}: {e}")
+            error(f"⚠️ Error extracting metadata for {file_path}: {e}")
             return {
                 'bpm': '',
                 'key': '',
@@ -277,10 +317,10 @@ class DatabaseIndexer:
             ''', (folder_path,))
             
             self.conn.commit()
-            print(f"🗑️ Removed existing entries for: {folder_path}")
+            info(f"🗑️ Removed existing entries for: {folder_path}")
             
         except Exception as e:
-            print(f"❌ Error removing folder entries: {e}")
+            error(f"❌ Error removing folder entries: {e}")
             raise
     
     def _scan_folder_recursive(self, folder_path: str, callback=None) -> int:
@@ -347,14 +387,14 @@ class DatabaseIndexer:
                             total_files_processed += self.batch_size
                             
                             # Show progress
-                            print(f"📦 Processed {total_files_processed} files...")
+                            debug(f"📦 Processed {total_files_processed} files...")
                         
                     except (OSError, PermissionError) as e:
-                        print(f"⚠️ Skipping file {file_path}: {e}")
+                        warning(f"⚠️ Skipping file {file_path}: {e}")
                         continue
                 
         except Exception as e:
-            print(f"❌ Error scanning folder {folder_path}: {e}")
+            error(f"❌ Error scanning folder {folder_path}: {e}")
             raise
         
         # Process remaining files in the last batch
@@ -403,10 +443,10 @@ class DatabaseIndexer:
             ''', batch_data)
             
             self.conn.commit()
-            print(f"✅ Inserted {len(files_data)} file records")
+            debug(f"✅ Inserted {len(files_data)} file records")
             
         except Exception as e:
-            print(f"❌ Error inserting files: {e}")
+            error(f"❌ Error inserting files: {e}")
             raise
     
     
@@ -424,13 +464,13 @@ class DatabaseIndexer:
         start_time = time.time()
         
         try:
-            print(f"🔍 Starting indexing of: {root_folder_path}")
-            print(f"📁 Allowed extensions: {len(self.allowed_extensions)} types")
-            print(f"📦 Processing in batches of {self.batch_size} files")
+            info(f"🔍 Starting indexing of: {root_folder_path}")
+            debug(f"📁 Allowed extensions: {len(self.allowed_extensions)} types")
+            debug(f"📦 Processing in batches of {self.batch_size} files")
             
             # Clear folder cache for fresh start
             self.folder_cache.clear()
-            print(f"🗂️ Folder cache cleared for fresh indexing")
+            debug(f"🗂️ Folder cache cleared for fresh indexing")
             
             # Remove existing entries for this folder
             self._remove_folder_entries(root_folder_path)
@@ -444,11 +484,11 @@ class DatabaseIndexer:
                 self._insert_files(files_batch)
                 total_files_processed += len(files_batch)
                 if show_progress:
-                    print(f"💾 Inserted batch of {len(files_batch)} files (Total: {total_files_processed})")
+                    info(f"💾 Inserted batch of {len(files_batch)} files (Total: {total_files_processed})")
             
             # Scan folder recursively with batch processing
             if show_progress:
-                print("📁 Scanning and processing files in batches...")
+                debug("📁 Scanning and processing files in batches...")
             
             files_processed = self._scan_folder_recursive(root_folder_path, process_batch)
             
@@ -472,16 +512,16 @@ class DatabaseIndexer:
                 'cache_efficiency_percent': cache_efficiency
             }
             
-            print(f"✅ Indexing completed in {total_time:.2f} seconds")
-            print(f"📊 Statistics: {stats['files_indexed']} files indexed")
-            print(f"⚡ Speed: {files_per_second:.1f} files/second")
-            print(f"📦 Processed in batches of {self.batch_size}")
-            print(f"🗂️ Folder cache: {unique_folders} unique folders, {cache_efficiency:.1f}% calculations saved")
+            info(f"✅ Indexing completed in {total_time:.2f} seconds")
+            debug(f"📊 Statistics: {stats['files_indexed']} files indexed")
+            debug(f"⚡ Speed: {files_per_second:.1f} files/second")
+            debug(f"📦 Processed in batches of {self.batch_size}")
+            info(f"🗂️ Folder cache: {unique_folders} unique folders, {cache_efficiency:.1f}% calculations saved")
             
             return stats
             
         except Exception as e:
-            print(f"❌ Error during indexing: {e}")
+            error(f"❌ Error during indexing: {e}")
             raise
     
     def get_database_stats(self) -> Dict[str, Any]:
@@ -510,7 +550,7 @@ class DatabaseIndexer:
             }
             
         except Exception as e:
-            print(f"❌ Error getting database stats: {e}")
+            error(f"❌ Error getting database stats: {e}")
             return {}
     
     def _restore_safe_settings(self):
@@ -520,7 +560,7 @@ class DatabaseIndexer:
             self.cursor.execute('PRAGMA locking_mode=NORMAL')  # Restore normal locking
             self.conn.commit()
         except Exception as e:
-            print(f"⚠️ Warning: Could not restore safe settings: {e}")
+            warning(f"⚠️ Warning: Could not restore safe settings: {e}")
     
     def close(self):
         """Close database connection and optimize database"""
@@ -528,17 +568,17 @@ class DatabaseIndexer:
         if self.automatic_tagger:
             try:
                 self.automatic_tagger.close()
-                print("🔒 Automatic tagger closed")
+                debug("🔒 Automatic tagger closed")
             except Exception as e:
-                print(f"⚠️ Warning: Could not close automatic tagger: {e}")
+                warning(f"⚠️ Warning: Could not close automatic tagger: {e}")
         
         # Close knowledge database
         if self.knowledge_db:
             try:
                 self.knowledge_db.close()
-                print("🔒 Knowledge database closed")
+                debug("🔒 Knowledge database closed")
             except Exception as e:
-                print(f"⚠️ Warning: Could not close knowledge database: {e}")
+                warning(f"⚠️ Warning: Could not close knowledge database: {e}")
         
         # Close database connection
         if self.conn:
@@ -550,12 +590,12 @@ class DatabaseIndexer:
                 self.cursor.execute('VACUUM')
                 self.cursor.execute('ANALYZE')
                 self.conn.commit()
-                print("🔧 Database optimized (VACUUM + ANALYZE)")
+                debug("🔧 Database optimized (VACUUM + ANALYZE)")
             except Exception as e:
-                print(f"⚠️ Warning: Could not optimize database: {e}")
+                warning(f"⚠️ Warning: Could not optimize database: {e}")
             finally:
                 self.conn.close()
-                print("🔒 Database connection closed")
+                debug("🔒 Database connection closed")
 
 
 def index_folder_to_db(root_folder_path: str, db_path: str = "patchio_index.db", batch_size: int = 1000) -> Dict[str, Any]:
@@ -582,10 +622,10 @@ if __name__ == "__main__":
     import sys
     
     if len(sys.argv) < 2:
-        print("Usage: python database_indexer.py <folder_path> [database_path] [batch_size]")
-        print("  folder_path: Path to folder to index")
-        print("  database_path: Path to SQLite database (default: patchio_index.db)")
-        print("  batch_size: Files per batch (default: 1000, recommended: 500-2000)")
+        debug("Usage: python database_indexer.py <folder_path> [database_path] [batch_size]")
+        debug("  folder_path: Path to folder to index")
+        debug("  database_path: Path to SQLite database (default: patchio_index.db)")
+        debug("  batch_size: Files per batch (default: 1000, recommended: 500-2000)")
         sys.exit(1)
     
     folder_path = sys.argv[1]
@@ -593,15 +633,15 @@ if __name__ == "__main__":
     batch_size = int(sys.argv[3]) if len(sys.argv) > 3 else 1000
     
     if not os.path.exists(folder_path):
-        print(f"❌ Folder does not exist: {folder_path}")
+        error(f"❌ Folder does not exist: {folder_path}")
         sys.exit(1)
     
     try:
-        print(f"🚀 Starting optimized indexing with batch size: {batch_size}")
+        info(f"🚀 Starting optimized indexing with batch size: {batch_size}")
         stats = index_folder_to_db(folder_path, db_path, batch_size)
-        print(f"\n📊 Final Statistics:")
+        debug(f"\n📊 Final Statistics:")
         for key, value in stats.items():
-            print(f"  {key}: {value}")
+            debug(f"  {key}: {value}")
     except Exception as e:
-        print(f"❌ Indexing failed: {e}")
+        error(f"❌ Indexing failed: {e}")
         sys.exit(1) 

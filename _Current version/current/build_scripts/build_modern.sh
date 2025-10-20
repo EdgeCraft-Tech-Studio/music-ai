@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Change to the directory where this script is located
-cd "$(dirname "$0")"
+# Change to the project root directory (parent of build_scripts)
+cd "$(dirname "$0")/.."
 
 set -e  # Exit on any error
 
@@ -20,8 +20,8 @@ UPDATER_SCRIPT="updater/external_updater.py"
 UPDATER_BINARY="$DIST_DIR/external_updater"
 APP_MANUAL="assets/docs/PatchIO_Manual.pdf"
 SIGNING_IDENTITY="Developer ID Application: Shaked Shachar (ZH2BJ5J2HZ)"
-PLIST="builds/build_config/custom_info.plist"
-ENTITLEMENTS="builds/build_config/entitlements.plist"
+PLIST="build_scripts/build_config/custom_info.plist"
+ENTITLEMENTS="build_scripts/build_config/entitlements.plist"
 
 # Detect architecture
 ARCH=$(uname -m)
@@ -112,6 +112,6 @@ ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$RELEASES_DIR/$ZIP_NAME"
 # Build DMG using DMG Canvas
 echo ""
 echo "💽 Building DMG with DMG Canvas..."
-./build_dmg.sh "$VERSION" "$ARCH_SUFFIX"
+./build_scripts/build_dmg.sh "$VERSION" "$ARCH_SUFFIX"
 
 echo "✅ Build complete: $RELEASES_DIR/$ZIP_NAME" 

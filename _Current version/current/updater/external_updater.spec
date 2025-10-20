@@ -34,5 +34,5 @@ exe = EXE(
     argv_emulation=False,
     target_arch=None,
     codesign_identity='Developer ID Application: Shaked Shachar (ZH2BJ5J2HZ)',
-    entitlements_file='builds/build_config/entitlements.plist',
+    entitlements_file='build_scripts/build_config/entitlements.plist',
 )

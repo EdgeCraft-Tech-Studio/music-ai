@@ -30,6 +30,9 @@ class FileIndexManager:
         self.db_path = db_path
         self.indexed_folders = indexed_folders
         self.supported_extensions = set(DEFAULT_EXTENSIONS)
+        
+        # 🚀 NEW: Cache known library names for robust audio file extraction
+        self._known_libraries_cache = None
         self.file_watcher = None
         self.is_monitoring = False
         self._lock = threading.Lock()
@@ -83,6 +86,7 @@ class FileIndexManager:
                     key TEXT,
                     vendor TEXT,
                     library TEXT,
+                    project TEXT,
                     keywords TEXT,
                     tags TEXT,
                     instrument TEXT,
@@ -118,10 +122,18 @@ class FileIndexManager:
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_files_path ON files(path)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_files_vendor ON files(vendor)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_files_library ON files(library)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_files_project ON files(project)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_files_modified_time ON files(modified_time)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_files_hash ON files(file_hash)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_file_hashes_path ON file_hashes(path)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_file_hashes_hash ON file_hashes(file_hash)')
+            
+            # Migrate existing databases (add project column if it doesn't exist)
+            cursor.execute("PRAGMA table_info(files)")
+            columns = [col[1] for col in cursor.fetchall()]
+            if 'project' not in columns:
+                cursor.execute('ALTER TABLE files ADD COLUMN project TEXT')
+                info("✅ Added 'project' column to existing database")
             
             conn.commit()
             conn.close()
@@ -129,6 +141,124 @@ class FileIndexManager:
         except Exception as e:
             error(f"❌ Error initializing database: {e}")
             raise
+    
+    def _prescan_projects(self) -> Dict[str, str]:
+        """
+        🚀 Pre-scan all indexed folders for DAW projects.
+        Returns a map of {folder_path: project_name} for instant lookup.
+        
+        This is MUCH faster than checking during file indexing because:
+        - Only scans each folder once
+        - No repeated os.listdir() calls
+        - Typical scan: 39,000+ folders/second
+        """
+        info("🎵 Pre-scanning folders for DAW projects...")
+        
+        PROJECT_EXTENSIONS = {'.cpr', '.logicx', '.als', '.flp', '.ptx', '.song', '.rpp'}
+        project_map = {}
+        total_folders = 0
+        projects_found = 0
+        start_time = time.time()
+        
+        for folder in self.indexed_folders:
+            if not os.path.exists(folder):
+                continue
+            
+            for root, dirs, files in os.walk(folder):
+                total_folders += 1
+                
+                # Check if this folder has a project file OR project folder (Logic .logicx)
+                found_project = False
+                
+                # Check files (.cpr, .als, .flp, .ptx, .song, .rpp)
+                for file in files:
+                    if any(file.lower().endswith(ext) for ext in PROJECT_EXTENSIONS):
+                        project_name = os.path.basename(root)
+                        project_map[root] = project_name
+                        projects_found += 1
+                        found_project = True
+                        break
+                
+                # Also check directories for Logic projects (.logicx)
+                if not found_project:
+                    for dir_name in dirs:
+                        if dir_name.lower().endswith('.logicx'):
+                            project_name = os.path.basename(root)
+                            project_map[root] = project_name
+                            projects_found += 1
+                            break
+        
+        elapsed = time.time() - start_time
+        rate = total_folders / elapsed if elapsed > 0 else 0
+        
+        info(f"✅ Project pre-scan complete: {projects_found} projects found in {total_folders:,} folders ({rate:.0f} folders/sec, {elapsed:.2f}s)")
+        
+        return project_map
+    
+    def _update_projects_in_database(self):
+        """
+        🚀 Update project column for audio files in project folders.
+        Uses the pre-scanned project_map for instant lookup.
+        """
+        if not hasattr(self, '_project_map') or not self._project_map:
+            return
+        
+        info("🎵 Updating project information for audio files...")
+        
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        try:
+            # Get all audio files (only these can be in projects)
+            cursor.execute("""
+                SELECT path FROM files 
+                WHERE name LIKE '%.wav' OR name LIKE '%.aiff' OR name LIKE '%.mp3' 
+                   OR name LIKE '%.flac' OR name LIKE '%.ogg'
+            """)
+            audio_files = cursor.fetchall()
+            
+            if not audio_files:
+                conn.close()
+                return
+            
+            # For each audio file, check if it's in a project folder
+            updates = []
+            for (file_path,) in audio_files:
+                project_name = None
+                parts = Path(file_path).parts
+                
+                # 🚀 PRIORITY: Check if .logicx is IN the path (file inside package)
+                for part in parts:
+                    if part.lower().endswith('.logicx'):
+                        project_name = part[:-7]  # Remove .logicx extension
+                        break
+                
+                # If not inside .logicx package, check project_map
+                if not project_name:
+                    for i in range(len(parts) - 1, max(0, len(parts) - 6), -1):
+                        folder = os.path.join('/', *parts[:i+1])
+                        if folder in self._project_map:
+                            project_name = self._project_map[folder]
+                            break
+                
+                if project_name:
+                    updates.append((project_name, file_path))
+            
+            # Batch update all files in projects
+            if updates:
+                cursor.executemany("""
+                    UPDATE files 
+                    SET vendor = 'User', library = NULL, project = ?
+                    WHERE path = ?
+                """, updates)
+                
+                conn.commit()
+                info(f"✅ Updated {len(updates)} audio files with project information")
+            
+        except Exception as e:
+            warning(f"⚠️  Error updating projects: {e}")
+        finally:
+            conn.close()
     
     def sync_index_with_filesystem(self, force_full_sync: bool = False, progress_callback: Optional[Callable] = None) -> Dict:
         """
@@ -161,6 +291,9 @@ class FileIndexManager:
                     'processing_rate': 0.0
                 }
                 
+                # 🚀 PRE-SCAN: Find all DAW projects before indexing (ultra-fast)
+                self._project_map = self._prescan_projects()
+                
                 # Check if we can skip sync
                 if not force_full_sync and self._can_skip_sync():
                     info("⚡ Skipping sync - no significant changes detected")
@@ -188,6 +321,10 @@ class FileIndexManager:
                     # Find and apply changes
                     changes = self._find_changes(db_files, fs_files)
                     self._apply_changes(changes)
+                    
+                    # 🚀 POST-PROCESS: Update project column for files in project folders
+                    if hasattr(self, '_project_map') and self._project_map:
+                        self._update_projects_in_database()
                 
                 # Update sync timestamp
                 self._update_last_sync_time('full_sync')
@@ -214,12 +351,12 @@ class FileIndexManager:
         try:
             # Always run sync on startup to detect deleted files
             # (Folder modification times don't change when files are deleted)
-            print("🔍 DEBUG: Always running sync on startup to detect deleted files")
+            debug("🔍 DEBUG: Always running sync on startup to detect deleted files")
             return False
             
             # If database file doesn't exist, we need to do a full sync
             if not os.path.exists(self.db_path):
-                print("🔍 DEBUG: Database file doesn't exist, need to do full sync")
+                debug("🔍 DEBUG: Database file doesn't exist, need to do full sync")
                 return False
             
             conn = sqlite3.connect(self.db_path)
@@ -228,7 +365,7 @@ class FileIndexManager:
             # Check if last_sync table exists
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='last_sync'")
             if not cursor.fetchone():
-                print("🔍 DEBUG: last_sync table doesn't exist, need to do full sync")
+                debug("🔍 DEBUG: last_sync table doesn't exist, need to do full sync")
                 conn.close()
                 return False
             
@@ -237,7 +374,7 @@ class FileIndexManager:
             result = cursor.fetchone()
             
             if not result:
-                print("🔍 DEBUG: No previous sync found, need to do full sync")
+                debug("🔍 DEBUG: No previous sync found, need to do full sync")
                 conn.close()
                 return False  # No previous sync, need to do full sync
             
@@ -366,13 +503,14 @@ class FileIndexManager:
                         # Skip hash calculation during initial scan for speed
                         file_hash = ""  # Empty hash for now
                         
-                        # 🚀 SIMPLIFIED vendor extraction for speed
-                        vendor, library = self._fast_extract_vendor_library(file_path)
+                        # 🚀 NEW: Use V3 extractor (fast and accurate + project detection)
+                        vendor, library, project = self._extract_vendor_library_from_path(file_path)
                         
                         fs_files[file_path] = {
                             'name': file_name,
                             'vendor': vendor,
                             'library': library,
+                            'project': project,
                             'file_type': file_type,
                             'modified_time': stat.st_mtime,
                             'file_size': stat.st_size,
@@ -394,8 +532,8 @@ class FileIndexManager:
                                 eta_seconds = remaining / rate if rate > 0 else 0
                                 eta_minutes = eta_seconds / 60
                                 
-                                print(f"🔍 Scanned {total_files_scanned:,} files, found {relevant_files_found:,} relevant files...")
-                                print(f"   Rate: {rate:.0f} files/sec, ETA: {eta_minutes:.1f} minutes")
+                                debug(f"🔍 Scanned {total_files_scanned:,} files, found {relevant_files_found:,} relevant files...")
+                                debug(f"   Rate: {rate:.0f} files/sec, ETA: {eta_minutes:.1f} minutes")
                             
                             last_progress_time = current_time
                             last_progress_count = total_files_scanned
@@ -407,8 +545,8 @@ class FileIndexManager:
         total_time = time.time() - start_time
         rate = total_files_scanned / total_time if total_time > 0 else 0
         
-        print(f"🔍 Filesystem scan complete: {total_files_scanned:,} total files, {relevant_files_found:,} relevant files")
-        print(f"   Scan rate: {rate:.0f} files/sec, Total time: {total_time:.1f} seconds")
+        info(f"🔍 Filesystem scan complete: {total_files_scanned:,} total files, {relevant_files_found:,} relevant files")
+        debug(f"   Scan rate: {rate:.0f} files/sec, Total time: {total_time:.1f} seconds")
         
         return fs_files
     
@@ -469,25 +607,68 @@ class FileIndexManager:
         except:
             return ""  # Return empty string if hash calculation fails
     
-    def _extract_vendor_library_from_path(self, file_path: str) -> Tuple[str, str]:
-        """Extract vendor and library from file path"""
+    def _get_known_libraries_from_db(self) -> list:
+        """
+        Load known library names from database (cached for performance).
+        🚀 BEST PRACTICE: Cache library names to avoid repeated DB queries.
+        """
+        if self._known_libraries_cache is not None:
+            return self._known_libraries_cache
+        
         try:
-            from utils.database.knowledge_database import KnowledgeDatabase
-            import appdirs
-            from settings.core_settings import APP_NAME, APP_AUTHOR
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
             
-            # Get knowledge database path
-            config_dir = appdirs.user_config_dir(APP_NAME, APP_AUTHOR)
-            knowledge_db_path = os.path.join(config_dir, 'patchio_knowledge.db')
+            # Get distinct library names that are not "Unknown Library"
+            cursor.execute("""
+                SELECT DISTINCT library 
+                FROM files 
+                WHERE library IS NOT NULL 
+                  AND library != 'Unknown Library'
+                  AND library != ''
+            """)
             
-            if os.path.exists(knowledge_db_path):
-                knowledge_db = KnowledgeDatabase(knowledge_db_path)
-                return knowledge_db.extract_vendor_library(file_path)
-            else:
-                return self._simple_extract_vendor_library(file_path)
+            self._known_libraries_cache = [row[0] for row in cursor.fetchall()]
+            conn.close()
+            
+            return self._known_libraries_cache
+            
+        except Exception as e:
+            # If DB doesn't exist yet or error, return empty list
+            return []
+    
+    def _extract_vendor_library_from_path(self, file_path: str) -> Tuple[str, Optional[str], Optional[str]]:
+        """
+        Extract vendor, library, and project from file path.
+        🚀 ROBUST: For audio files, passes known libraries from DB to V3.
+        🚀 PROJECT: Detects DAW projects and returns project name.
+        
+        Returns:
+            (vendor, library, project) tuple
+        """
+        try:
+            # 🚀 NEW: Use V3 extractor (fast pattern-based extraction + project detection)
+            from utils.database.library_extractor_v3 import LibraryExtractorV3
+            
+            # Create or reuse V3 extractor (uses shared vendor cache from knowledge DB)
+            if not hasattr(self, '_v3_extractor'):
+                self._v3_extractor = LibraryExtractorV3(use_knowledge_db=True)
+            
+            # Get known libraries from DB (cached)
+            known_libraries = self._get_known_libraries_from_db()
+            
+            # Get project map (if available from pre-scan)
+            project_map = getattr(self, '_project_map', None)
+            
+            # Pass known libraries and project map to V3 for robust extraction
+            return self._v3_extractor.extract_vendor_library(
+                file_path, 
+                known_libraries=known_libraries,
+                project_map=project_map
+            )
                 
         except Exception as e:
-            return self._simple_extract_vendor_library(file_path)
+            return 'Unknown Vendor', 'Unknown Library', None
     
     def _fast_extract_vendor_library(self, file_path: str) -> Tuple[str, str]:
         """🚀 ULTRA-FAST vendor/library extraction - optimized for speed"""
@@ -584,12 +765,12 @@ class FileIndexManager:
                         last_dot = file_name.rfind('.')
                         file_type = file_name[last_dot:].lower() if last_dot != -1 else ''
                         
-                        # 🚀 FAST vendor extraction
-                        vendor, library = self._fast_extract_vendor_library(file_path)
+                        # 🚀 NEW: Use V3 extractor (fast and accurate + project detection)
+                        vendor, library, project = self._extract_vendor_library_from_path(file_path)
                         
                         # Add to batch buffer
                         batch_buffer.append((
-                            file_path, file_name, vendor, library, file_type,
+                            file_path, file_name, vendor, library, project, file_type,
                             stat.st_mtime, stat.st_size, ""  # Empty hash for now
                         ))
                         
@@ -613,8 +794,8 @@ class FileIndexManager:
                                 eta_seconds = remaining / rate if rate > 0 else 0
                                 eta_minutes = eta_seconds / 60
                                 
-                                print(f"🌊 Streaming: {total_files_scanned:,} scanned, {relevant_files_found:,} relevant, {self.stats['files_added']:,} added")
-                                print(f"   Rate: {rate:.0f} files/sec, ETA: {eta_minutes:.1f} minutes")
+                                debug(f"🌊 Streaming: {total_files_scanned:,} scanned, {relevant_files_found:,} relevant, {self.stats['files_added']:,} added")
+                                debug(f"   Rate: {rate:.0f} files/sec, ETA: {eta_minutes:.1f} minutes")
                                 
                                 # Call progress callback if provided
                                 if self.progress_callback:
@@ -654,10 +835,10 @@ class FileIndexManager:
         try:
             # 🚀 BATCH INSERT with INSERT OR IGNORE to handle duplicates
             insert_sql = """
-                INSERT OR IGNORE INTO files (path, name, vendor, library, file_type, 
+                INSERT OR IGNORE INTO files (path, name, vendor, library, project, file_type, 
                                            modified_time, file_size, file_hash, 
                                            created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'), strftime('%s', 'now'))
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'), strftime('%s', 'now'))
             """
             
             cursor.executemany(insert_sql, batch_data)
@@ -672,9 +853,15 @@ class FileIndexManager:
         finally:
             conn.close()
     
-    def _simple_extract_vendor_library(self, file_path: str) -> Tuple[str, str]:
-        """Simple fallback vendor/library extraction"""
-        return self._fast_extract_vendor_library(file_path)
+    def _simple_extract_vendor_library(self, file_path: str) -> Tuple[str, Optional[str], Optional[str]]:
+        """
+        Simple fallback vendor/library extraction.
+        🚀 NEW: Now uses V3 extractor with project detection.
+        
+        Returns:
+            (vendor, library, project) tuple
+        """
+        return self._extract_vendor_library_from_path(file_path)
     
     def _find_changes(self, db_files: Dict, fs_files: Dict) -> Dict:
         """Find differences between database and filesystem"""
@@ -779,7 +966,7 @@ class FileIndexManager:
                     
                     # Progress reporting
                     if (i + self.batch_size) % (self.batch_size * 10) == 0:
-                        print(f"   Added {i + len(batch_data)}/{len(changes['to_add'])} files...")
+                        debug(f"   Added {i + len(batch_data)}/{len(changes['to_add'])} files...")
                 
                 info(f"✅ Added {self.stats['files_added']} files successfully")
             
@@ -1029,14 +1216,15 @@ class FileIndexManager:
             file_type = file_name[last_dot:].lower() if last_dot != -1 else ''
             
             file_hash = self._calculate_file_hash(file_path)
-            vendor, library = self._fast_extract_vendor_library(file_path)
+            # 🚀 NEW: Use V3 extractor (fast and accurate + project detection)
+            vendor, library, project = self._extract_vendor_library_from_path(file_path)
             
             cursor.execute("""
-                INSERT OR IGNORE INTO files (path, name, vendor, library, file_type, 
+                INSERT OR IGNORE INTO files (path, name, vendor, library, project, file_type, 
                                            modified_time, file_size, file_hash, 
                                            created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'), strftime('%s', 'now'))
-            """, (file_path, file_name, vendor, library, file_type, 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'), strftime('%s', 'now'))
+            """, (file_path, file_name, vendor, library, project, file_type, 
                  stat.st_mtime, stat.st_size, file_hash))
             
             info(f"➕ Added file: {file_name}")
@@ -1077,15 +1265,16 @@ class FileIndexManager:
                 file_type = file_name[last_dot:].lower() if last_dot != -1 else ''
                 
                 file_hash = self._calculate_file_hash(new_path)
-                vendor, library = self._fast_extract_vendor_library(new_path)
+                # 🚀 NEW: Use V3 extractor (fast and accurate + project detection)
+                vendor, library, project = self._extract_vendor_library_from_path(new_path)
                 
                 cursor.execute("""
                     UPDATE files 
                     SET path = ?, name = ?, modified_time = ?, file_size = ?, 
-                        file_hash = ?, vendor = ?, library = ?, updated_at = strftime('%s', 'now')
+                        file_hash = ?, vendor = ?, library = ?, project = ?, updated_at = strftime('%s', 'now')
                     WHERE path = ?
                 """, (new_path, file_name, stat.st_mtime, stat.st_size, 
-                     file_hash, vendor, library, old_path))
+                     file_hash, vendor, library, project, old_path))
                 
                 if cursor.rowcount > 0:
                     info(f"🔄 Moved file: {os.path.basename(old_path)} -> {file_name}")
@@ -1109,14 +1298,15 @@ class FileIndexManager:
         try:
             stat = os.stat(file_path)
             file_hash = self._calculate_file_hash(file_path)
-            vendor, library = self._fast_extract_vendor_library(file_path)
+            # 🚀 NEW: Use V3 extractor (fast and accurate + project detection)
+            vendor, library, project = self._extract_vendor_library_from_path(file_path)
             
             cursor.execute("""
                 UPDATE files 
                 SET modified_time = ?, file_size = ?, file_hash = ?, 
-                    vendor = ?, library = ?, updated_at = strftime('%s', 'now')
+                    vendor = ?, library = ?, project = ?, updated_at = strftime('%s', 'now')
                 WHERE path = ?
-            """, (stat.st_mtime, stat.st_size, file_hash, vendor, library, file_path))
+            """, (stat.st_mtime, stat.st_size, file_hash, vendor, library, project, file_path))
             
             if cursor.rowcount > 0:
                 info(f"📝 Updated file: {os.path.basename(file_path)}")
@@ -1290,7 +1480,7 @@ def sync_index_with_filesystem(db_path: str, indexed_folders: Set[str], force_fu
 # Test function
 def test_file_index_manager():
     """Test the file index manager"""
-    print("🧪 Testing File Index Manager")
+    debug("🧪 Testing File Index Manager")
     
     import tempfile
     import shutil
@@ -1317,24 +1507,24 @@ def test_file_index_manager():
         with open(hidden_file, 'w') as f:
             f.write('hidden content')
         
-        print(f"Created test directory: {test_dir}")
+        debug(f"Created test directory: {test_dir}")
         
         # Test file index manager
         manager = FileIndexManager(test_db, {test_dir})
         
         # Test sync
         results = manager.sync_index_with_filesystem(force_full_sync=True)
-        print(f"Sync results: {results}")
+        debug(f"Sync results: {results}")
         
         # Test search
         search_results = manager.search_files('test')
-        print(f"Search results: {len(search_results)} files found")
+        debug(f"Search results: {len(search_results)} files found")
         
         # Test statistics
         stats = manager.get_statistics()
-        print(f"Statistics: {stats}")
+        debug(f"Statistics: {stats}")
         
-        print("✅ File Index Manager test completed successfully")
+        info("✅ File Index Manager test completed successfully")
         
     finally:
         # Cleanup

@@ -1,0 +1,54 @@
+{
+  "diskImage" : {
+    "appleID" : "shaked5sha@gmail.com",
+    "autoopen" : true,
+    "background" : {
+      "layoutObjects" : [
+
+      ],
+      "type" : 3
+    },
+    "codeSigningIdentityString" : "26D49FDBADE8F1637953E2EB5CA3E5A89EEAB8D8",
+    "iconPreviewVisible" : false,
+    "iconSize" : 128,
+    "itemInfoVisible" : false,
+    "labelPosition" : 0,
+    "licenses" : [
+
+    ],
+    "nameFontSize" : 12,
+    "statusBarVisible" : false,
+    "suggestedDiskImageName" : "PatchIO_v1.1.5_Mac_arm64.dmg",
+    "teamID" : "ZH2BJ5J2HZ\nZH2BJ5J2HZ",
+    "toolbarVisible" : false,
+    "uid" : "vjazqafbkl",
+    "validationScheme" : 1,
+    "viewLayout" : 0,
+    "volumeName" : "PatchIO",
+    "volumeSize" : 0,
+    "volumeSizeOption" : "Automatic",
+    "windowContentHeight" : 360,
+    "windowContents" : [
+      {
+        "filePath" : "\/Applications",
+        "iconSize" : 100,
+        "invisible" : false,
+        "isAnAlias" : true,
+        "location" : "{444, 191}",
+        "relativeFilePath" : "..\/..\/..\/..\/..\/..\/..\/..\/..\/Applications"
+      },
+      {
+        "filePath" : "\/Users\/shaked\/Desktop\/PatchFinder new git\/PatchFinder\/_Current version\/current\/builds\/dist\/PatchIO.app",
+        "iconSize" : 100,
+        "invisible" : false,
+        "isAnAlias" : false,
+        "location" : "{173, 191}",
+        "relativeFilePath" : "..\/dist\/PatchIO.app"
+      }
+    ],
+    "windowContentWidth" : 600,
+    "windowLeft" : 200,
+    "windowTop" : 120
+  },
+  "version" : 4
+}

@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Change to the directory where this script is located
-cd "$(dirname "$0")"
+# Change to the project root directory (parent of build_scripts)
+cd "$(dirname "$0")/.."
 
 set -e  # exit if any command fails
 

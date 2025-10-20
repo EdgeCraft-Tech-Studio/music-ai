@@ -3,7 +3,7 @@ import plistlib
 import os
 
 # Load your custom Info.plist as a dict
-with open('builds/build_config/custom_info.plist', 'rb') as f:
+with open('build_scripts/build_config/custom_info.plist', 'rb') as f:
     custom_plist = plistlib.load(f)
 
 # Build directories are specified via command-line options:

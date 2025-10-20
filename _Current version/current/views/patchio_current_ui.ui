@@ -269,6 +269,31 @@ QLabel:hover {
              </property>
             </widget>
            </item>
+           <item>
+            <widget class="QLabel" name="preferencesButton">
+             <property name="styleSheet">
+              <string notr="true">QLabel {
+    color: #FFFFFF;
+    font-size: 14px;
+    padding: 8px 12px;
+    border: none;
+    border-radius: 0px;
+    background-color: transparent;
+}
+
+QLabel:hover {
+    background-color: #2C2C2E;
+    border-radius: 4px;
+}</string>
+             </property>
+             <property name="lineWidth">
+              <number>0</number>
+             </property>
+             <property name="text">
+              <string>Preferences</string>
+             </property>
+            </widget>
+           </item>
           </layout>
          </widget>
         </item>

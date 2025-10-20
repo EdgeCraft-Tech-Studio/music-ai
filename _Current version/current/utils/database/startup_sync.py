@@ -38,7 +38,197 @@ class StartupSync:
             'sync_time': 0.0
         }
         
+        # 🚀 OPTIMIZATION: Initialize shared knowledge database
+        self._knowledge_db = self._get_shared_knowledge_database()
+        
+        # Sync vendors from knowledge_initial.json to knowledge DB
+        self._sync_vendors_on_startup()
+        
         info("🔄 Startup sync initialized for {} folders".format(len(indexed_folders)))
+    
+    def _get_shared_knowledge_database(self):
+        """
+        Get shared knowledge database instance for the entire sync process.
+        Uses centralized AppDirs path (single source of truth).
+        """
+        try:
+            from utils.database.knowledge_database import KnowledgeDatabase
+            
+            # KnowledgeDatabase() automatically uses AppDirs location
+            # Will create DB if doesn't exist
+            return KnowledgeDatabase()
+        except Exception as e:
+            warning(f"❌ Error getting shared knowledge database: {e}")
+            return None
+    
+    def _sync_vendors_on_startup(self):
+        """Sync vendors from knowledge_initial.json to knowledge database on startup"""
+        if not self._knowledge_db:
+            return
+        
+        try:
+            from utils.database.library_extractor_v3 import LibraryExtractorV3
+            
+            # Load vendors from JSON
+            vendors_from_json = LibraryExtractorV3.get_default_vendors()
+            
+            if not vendors_from_json:
+                debug("⚠️  No vendors found in knowledge_initial.json")
+                return
+            
+            # Check how many vendors are currently in DB
+            self._knowledge_db.cursor.execute("SELECT COUNT(*) FROM vendor_profiles")
+            current_count = self._knowledge_db.cursor.fetchone()[0]
+            
+            # Sync vendors to knowledge DB
+            for canonical_name, aliases in vendors_from_json.items():
+                self._knowledge_db.cursor.execute(
+                    'SELECT id FROM vendor_profiles WHERE vendor_name = ?',
+                    (canonical_name,)
+                )
+                existing = self._knowledge_db.cursor.fetchone()
+                
+                if not existing:
+                    # Add new vendor
+                    self._knowledge_db.cursor.execute('''
+                        INSERT INTO vendor_profiles (vendor_name, display_name, aliases)
+                        VALUES (?, ?, ?)
+                    ''', (canonical_name, canonical_name, json.dumps(aliases)))
+            
+            self._knowledge_db.conn.commit()
+            
+            # Check new count
+            self._knowledge_db.cursor.execute("SELECT COUNT(*) FROM vendor_profiles")
+            new_count = self._knowledge_db.cursor.fetchone()[0]
+            
+            if new_count > current_count:
+                added = new_count - current_count
+                info(f"✅ Synced {added} new vendors to knowledge database")
+            elif current_count == 0:
+                info(f"✅ Initialized knowledge database with {new_count} vendors")
+            else:
+                debug(f"✓ Knowledge database already has {new_count} vendors")
+                
+        except Exception as e:
+            warning(f"⚠️  Could not sync vendors on startup: {e}")
+    
+    def _prescan_projects(self) -> Dict[str, str]:
+        """
+        🚀 Pre-scan all indexed folders for DAW projects.
+        Returns a map of {folder_path: project_name} for instant lookup.
+        
+        This is MUCH faster than checking during file indexing because:
+        - Only scans each folder once
+        - No repeated os.listdir() calls
+        - Typical scan: 39,000+ folders/second
+        """
+        info("🎵 Pre-scanning folders for DAW projects...")
+        
+        PROJECT_EXTENSIONS = {'.cpr', '.logicx', '.als', '.flp', '.ptx', '.song', '.rpp'}
+        project_map = {}
+        total_folders = 0
+        projects_found = 0
+        start_time = time.time()
+        
+        for folder in self.indexed_folders:
+            if not os.path.exists(folder):
+                continue
+            
+            for root, dirs, files in os.walk(folder):
+                total_folders += 1
+                
+                # Check if this folder has a project file OR project folder (Logic .logicx)
+                found_project = False
+                
+                # Check files (.cpr, .als, .flp, .ptx, .song, .rpp)
+                for file in files:
+                    if any(file.lower().endswith(ext) for ext in PROJECT_EXTENSIONS):
+                        project_name = os.path.basename(root)
+                        project_map[root] = project_name
+                        projects_found += 1
+                        found_project = True
+                        break
+                
+                # Also check directories for Logic projects (.logicx)
+                if not found_project:
+                    for dir_name in dirs:
+                        if dir_name.lower().endswith('.logicx'):
+                            project_name = os.path.basename(root)
+                            project_map[root] = project_name
+                            projects_found += 1
+                            break
+        
+        elapsed = time.time() - start_time
+        rate = total_folders / elapsed if elapsed > 0 else 0
+        
+        info(f"✅ Project pre-scan complete: {projects_found} projects found in {total_folders:,} folders ({rate:.0f} folders/sec, {elapsed:.2f}s)")
+        
+        return project_map
+    
+    def _update_projects_in_database(self):
+        """
+        🚀 Update project column for audio files in project folders.
+        Uses the pre-scanned project_map for instant lookup.
+        """
+        if not hasattr(self, '_project_map') or not self._project_map:
+            return
+        
+        info("🎵 Updating project information for audio files...")
+        
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        try:
+            # Get all audio files (only these can be in projects)
+            cursor.execute("""
+                SELECT path FROM files 
+                WHERE name LIKE '%.wav' OR name LIKE '%.aiff' OR name LIKE '%.mp3' 
+                   OR name LIKE '%.flac' OR name LIKE '%.ogg'
+            """)
+            audio_files = cursor.fetchall()
+            
+            if not audio_files:
+                conn.close()
+                return
+            
+            # For each audio file, check if it's in a project folder
+            updates = []
+            for (file_path,) in audio_files:
+                project_name = None
+                parts = Path(file_path).parts
+                
+                # 🚀 PRIORITY: Check if .logicx is IN the path (file inside package)
+                for part in parts:
+                    if part.lower().endswith('.logicx'):
+                        project_name = part[:-7]  # Remove .logicx extension
+                        break
+                
+                # If not inside .logicx package, check project_map
+                if not project_name:
+                    for i in range(len(parts) - 1, max(0, len(parts) - 6), -1):
+                        folder = os.path.join('/', *parts[:i+1])
+                        if folder in self._project_map:
+                            project_name = self._project_map[folder]
+                            break
+                
+                if project_name:
+                    updates.append((project_name, file_path))
+            
+            # Batch update all files in projects
+            if updates:
+                cursor.executemany("""
+                    UPDATE files 
+                    SET vendor = 'User', library = NULL, project = ?
+                    WHERE path = ?
+                """, updates)
+                
+                conn.commit()
+                info(f"✅ Updated {len(updates)} audio files with project information")
+            
+        except Exception as e:
+            warning(f"⚠️  Error updating projects: {e}")
+        finally:
+            conn.close()
     
     def _initialize_database(self):
         """Initialize database with required tables"""
@@ -60,6 +250,7 @@ class StartupSync:
                     key TEXT,
                     vendor TEXT,
                     library TEXT,
+                    project TEXT,
                     keywords TEXT,
                     tags TEXT,
                     instrument TEXT,
@@ -74,7 +265,15 @@ class StartupSync:
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_files_path ON files(path)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_files_vendor ON files(vendor)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_files_library ON files(library)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_files_project ON files(project)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_files_modified_time ON files(modified_time)')
+            
+            # Migrate existing databases (add project column if it doesn't exist)
+            cursor.execute("PRAGMA table_info(files)")
+            columns = [col[1] for col in cursor.fetchall()]
+            if 'project' not in columns:
+                cursor.execute('ALTER TABLE files ADD COLUMN project TEXT')
+                info("✅ Added 'project' column to existing database")
             
             # Create last_sync table for intelligent sync
             cursor.execute('''
@@ -101,6 +300,9 @@ class StartupSync:
             # Initialize database if needed
             self._initialize_database()
             
+            # 🚀 PRE-SCAN: Find all DAW projects before indexing (ultra-fast)
+            self._project_map = self._prescan_projects()
+            
             # Check if we can skip sync (quick check)
             if not force_full_sync and self._can_skip_sync():
                 info("⚡ Skipping sync - no significant changes detected")
@@ -120,6 +322,10 @@ class StartupSync:
             
             # Apply changes to database
             self._apply_changes(changes)
+            
+            # 🚀 POST-PROCESS: Update project column for files in project folders
+            if self._project_map:
+                self._update_projects_in_database()
             
             # Update last sync timestamp
             self._update_last_sync_time()
@@ -222,7 +428,7 @@ class StartupSync:
             error("❌ Error updating last sync time: {}".format(e))
     
     def _scan_file_system(self) -> Dict[str, Dict]:
-        """Scan indexed folders for relevant files"""
+        """Scan indexed folders for relevant files with optimized batch processing"""
         fs_files = {}
         
         for folder in self.indexed_folders:
@@ -233,8 +439,14 @@ class StartupSync:
             self.stats['folders_scanned'] += 1
             info("🔍 Scanning folder: {}".format(folder))
             
+            # Collect all files first, then process by folder batches
+            folder_files = {}  # folder_path -> list of files
+            
             # Walk through folder recursively
             for root, dirs, files in os.walk(folder):
+                folder_path = root
+                folder_files[folder_path] = []
+                
                 for file in files:
                     file_path = os.path.join(root, file)
                     
@@ -248,22 +460,51 @@ class StartupSync:
                         file_name = os.path.basename(file_path)
                         file_type = Path(file_path).suffix.lower()
                         
-                        # Extract vendor and library info using knowledge database
-                        vendor, library = self._extract_vendor_library_from_path(file_path)
-                        
-                        fs_files[file_path] = {
+                        folder_files[folder_path].append({
+                            'path': file_path,
                             'name': file_name,
-                            'vendor': vendor,
-                            'library': library,
-                            'file_type': file_type,
-                            'modified_time': stat.st_mtime
-                        }
-                        
-                        self.stats['files_scanned'] += 1
+                            'type': file_type,
+                            'mtime': stat.st_mtime
+                        })
                         
                     except (OSError, IOError) as e:
                         warning("⚠️ Cannot access file {}: {}".format(file_path, e))
                         continue
+            
+            # Process files by folder batches for better performance
+            total_folders = len([f for f in folder_files.values() if f])
+            processed_folders = 0
+            
+            for folder_path, files in folder_files.items():
+                if not files:
+                    continue
+                
+                processed_folders += 1
+                
+                # 🚀 OPTIMIZED vendor/library extraction + project detection
+                vendor, library, project = self._extract_vendor_library_from_path(files[0]['path'])
+                
+                # Log progress for this folder with batch info (reduced frequency for speed)
+                if processed_folders % 200 == 0 or len(files) > 100:  # Log every 200 folders or large folders
+                    if len(files) > 1:
+                        info("🔍 Optimized extraction for {} files in folder ({}/{}): {} - {}".format(
+                            len(files), processed_folders, total_folders, vendor, library))
+                    else:
+                        info("🔍 Optimized extraction for {} ({}/{}): {} - {}".format(
+                            files[0]['name'], processed_folders, total_folders, vendor, library))
+                
+                # Add all files from this folder with the same vendor/library/project
+                for file_info in files:
+                    fs_files[file_info['path']] = {
+                        'name': file_info['name'],
+                        'vendor': vendor,
+                        'library': library,
+                        'project': project,
+                        'file_type': file_info['type'],
+                        'modified_time': file_info['mtime']
+                    }
+                    
+                    self.stats['files_scanned'] += 1
         
         return fs_files
     
@@ -303,9 +544,9 @@ class StartupSync:
             # Add new files
             for path, info in changes['to_add']:
                 cursor.execute("""
-                    INSERT INTO files (path, name, vendor, library, file_type, modified_time)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                """, (path, info['name'], info['vendor'], info['library'], 
+                    INSERT INTO files (path, name, vendor, library, project, file_type, modified_time)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (path, info['name'], info['vendor'], info['library'], info.get('project'),
                      info['file_type'], info['modified_time']))
                 self.stats['files_added'] += 1
             
@@ -389,59 +630,162 @@ class StartupSync:
         return ext in self.supported_extensions
     
     def _extract_vendor_library_from_path(self, file_path: str) -> tuple:
-        """Extract vendor and library from file path using knowledge database"""
+        """🚀 OPTIMIZED vendor/library/project extraction using V3 with project detection"""
         try:
-            from utils.database.knowledge_database import KnowledgeDatabase
-            import appdirs
-            from settings.core_settings import APP_NAME, APP_AUTHOR
+            # 🚀 Use V3 extractor with project detection
+            from utils.database.library_extractor_v3 import LibraryExtractorV3
+            if not hasattr(self, '_v3_extractor'):
+                self._v3_extractor = LibraryExtractorV3(use_knowledge_db=True)
             
-            # Get knowledge database path
-            config_dir = appdirs.user_config_dir(APP_NAME, APP_AUTHOR)
-            knowledge_db_path = os.path.join(config_dir, 'patchio_knowledge.db')
+            # Get project map (if available from pre-scan)
+            project_map = getattr(self, '_project_map', None)
             
-            if os.path.exists(knowledge_db_path):
-                knowledge_db = KnowledgeDatabase(knowledge_db_path)
-                return knowledge_db.extract_vendor_library(file_path)
-            else:
-                # Fallback to simple extraction if knowledge database not available
-                return self._simple_extract_vendor_library(file_path)
+            return self._v3_extractor.extract_vendor_library(file_path, project_map=project_map)
                 
         except Exception as e:
             # Fallback to simple extraction on error
             return self._simple_extract_vendor_library(file_path)
     
+    def _extract_vendor_library_hierarchy(self, file_path: str, knowledge_db) -> tuple:
+        """Extract vendor/library using folder hierarchy with improved caching"""
+        # Get folder path for caching
+        folder_path = str(Path(file_path).parent)
+        
+        # Initialize folder cache if not exists
+        if not hasattr(self, '_folder_cache'):
+            self._folder_cache = {}
+        
+        # Check if we already processed this folder
+        if folder_path in self._folder_cache:
+            # DISABLED for performance - too much I/O overhead
+            # debug(f"🚀 Using cached result for folder: {folder_path}")
+            return self._folder_cache[folder_path]
+        
+        # DISABLED for performance - too much I/O overhead
+        # debug(f"🔍 Processing new folder: {folder_path}")
+        # 🚀 NEW: Use V3 extractor (fast pattern-based)
+        from utils.database.library_extractor_v3 import LibraryExtractorV3
+        if not hasattr(self, '_v3_extractor'):
+            self._v3_extractor = LibraryExtractorV3(use_knowledge_db=True)
+        
+        # Get project map (if available from pre-scan)
+        project_map = getattr(self, '_project_map', None)
+        
+        vendor, library, project = self._v3_extractor.extract_vendor_library(file_path, project_map=project_map)
+        
+        # Cache result for this folder and all parent folders to avoid re-processing
+        self._folder_cache[folder_path] = (vendor, library, project)
+        
+        # Also cache for parent folders to speed up future processing
+        parent_path = str(Path(folder_path).parent)
+        if parent_path != folder_path and parent_path not in self._folder_cache:
+            self._folder_cache[parent_path] = (vendor, library, project)
+        
+        return vendor, library, project
+    
     def _simple_extract_vendor_library(self, file_path: str) -> tuple:
-        """Simple fallback vendor/library extraction"""
-        path_parts = Path(file_path).parts
-        
-        # Skip volume names and common system folders
-        skip_parts = {'volumes', 'users', 'applications', 'desktop', 'documents', 'downloads', 'samples', 'patches', 'instruments', 'presets'}
-        
-        # Look for common vendor names in path
-        vendor_keywords = [
-            'native instruments', 'spitfire', 'heavyocity', 'eastwest', 
-            'cinesamples', 'synthogy', 'apple', 'steinberg', 'image-line',
-            'avid', 'cockos', 'bitwig', 'reason studios'
-        ]
-        
-        vendor = 'Unknown Vendor'
-        library = 'Unknown Library'
-        
-        for i, part in enumerate(path_parts):
-            part_lower = part.lower()
-            if part_lower in skip_parts or len(part) > 20:
-                continue
-            for vendor_keyword in vendor_keywords:
-                if vendor_keyword in part_lower:
-                    vendor = vendor_keyword.title()
-                    # Library is usually the next folder after vendor
-                    if i + 1 < len(path_parts):
-                        next_part = path_parts[i + 1]
-                        if next_part.lower() not in skip_parts and len(next_part) <= 30:
-                            library = next_part
+        """
+        Simple fallback vendor/library extraction.
+        🚀 NEW: Uses V3 extractor for accurate extraction.
+        """
+        from utils.database.library_extractor_v3 import LibraryExtractorV3
+        if not hasattr(self, '_v3_extractor'):
+            self._v3_extractor = LibraryExtractorV3(use_knowledge_db=True)
+        return self._v3_extractor.extract_vendor_library(file_path)
+    
+    def _extract_vendor_library_ultra_fast(self, file_path: str):
+        """🚀 ULTRA-FAST vendor/library extraction - no database calls, just pattern matching"""
+        try:
+            # Use string operations for maximum speed
+            path_lower = file_path.lower()
+            
+            # 🚀 ULTRA-FAST pattern matching (pre-compiled)
+            vendor_patterns = {
+                'native instruments': 'Native Instruments',
+                'kontakt': 'Native Instruments',
+                'spitfire': 'Spitfire Audio',
+                'spitfire audio': 'Spitfire Audio',
+                'heavyocity': 'Heavyocity',
+                'eastwest': 'EastWest',
+                'east west': 'EastWest',
+                'composer cloud': 'EastWest',
+                'hollywood': 'EastWest',
+                'cinesamples': 'Cinesamples',
+                'synthogy': 'Synthogy',
+                'apple': 'Apple',
+                'steinberg': 'Steinberg',
+                'image-line': 'Image-Line',
+                'avid': 'Avid',
+                'cockos': 'Cockos',
+                'bitwig': 'Bitwig',
+                'reason studios': 'Reason Studios',
+                'output': 'Output',
+                '8dio': '8DIO',
+                'orchestral tools': 'Orchestral Tools',
+                'audio imperia': 'Audio Imperia',
+                'keep forest': 'Keep Forest',
+                'sonokinetic': 'Sonokinetic',
+                'project sam': 'Project SAM',
+                'omnisphere': 'Spectrasonics',
+                'spectrasonics': 'Spectrasonics',
+                'arturia': 'Arturia',
+                'u-he': 'u-he',
+                'fabfilter': 'FabFilter',
+                'izotope': 'iZotope',
+                'waves': 'Waves',
+                'plugin alliance': 'Plugin Alliance',
+                'softube': 'Softube',
+                'valhalla': 'Valhalla DSP',
+                'soundtoys': 'Soundtoys',
+                'splice': 'Splice',
+                'loopmasters': 'Loopmasters',
+                'black octopus': 'Black Octopus',
+                'ghost syndicate': 'Ghost Syndicate',
+                'vengeance': 'Vengeance',
+                'prime loops': 'Prime Loops',
+                'sample magic': 'Sample Magic',
+                'big fish audio': 'Big Fish Audio',
+                'zero-g': 'Zero-G',
+                'best service': 'Best Service',
+                'engine': 'Best Service'
+            }
+            
+            # Find vendor using ultra-fast pattern matching
+            vendor = 'Unknown Vendor'
+            library = 'Unknown Library'
+            
+            for pattern, vendor_name in vendor_patterns.items():
+                if pattern in path_lower:
+                    vendor = vendor_name
+                    # Fast library extraction
+                    library = self._extract_library_ultra_fast(file_path, pattern)
                     break
-        
-        return vendor, library
+            
+            return vendor, library
+            
+        except Exception as e:
+            warning(f"❌ Error in ultra-fast extraction: {e}")
+            return 'Unknown Vendor', 'Unknown Library'
+    
+    def _extract_library_ultra_fast(self, file_path: str, vendor_pattern: str):
+        """🚀 ULTRA-FAST library name extraction"""
+        try:
+            parts = file_path.split(os.sep)
+            
+            for i, part in enumerate(parts):
+                if vendor_pattern in part.lower():
+                    # Look for library in next few folders (optimized)
+                    for j in range(i + 1, min(i + 3, len(parts))):  # Only check next 2 folders
+                        next_part = parts[j]
+                        if (len(next_part) > 2 and len(next_part) <= 30 and 
+                            next_part.lower() not in {'samples', 'patches', 'instruments', 'presets', 'content', 'data', 'library', 'libraries'}):
+                            return next_part
+                    break
+            
+            return 'Unknown Library'
+            
+        except Exception:
+            return 'Unknown Library'
     
     def _log_sync_results(self):
         """Log synchronization results"""
@@ -463,7 +807,7 @@ class StartupSync:
 # Test function
 def test_startup_sync():
     """Test the startup synchronization"""
-    print("🧪 Testing Startup Synchronization")
+    debug("🧪 Testing Startup Synchronization")
     
     # Get database path
     import appdirs
@@ -481,11 +825,11 @@ def test_startup_sync():
     try:
         # Perform sync
         results = sync.sync_database()
-        print("✅ Startup sync completed successfully")
-        print("Results:", results)
+        info("✅ Startup sync completed successfully")
+        debug("Results:", results)
         
     except Exception as e:
-        print("❌ Startup sync failed: {}".format(e))
+        error("❌ Startup sync failed: {}".format(e))
         import traceback
         traceback.print_exc()
 

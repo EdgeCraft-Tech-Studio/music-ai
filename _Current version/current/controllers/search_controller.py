@@ -381,14 +381,14 @@ class SearchController:
         """Apply active filters to a search result. Returns True if result passes all filters."""
         # Get the main controller to access active filters
         if not hasattr(self, 'main_controller') or not hasattr(self.main_controller, 'get_active_filters'):
-            print(f"🔍 DEBUG: No main controller or get_active_filters method")
+            debug(f"🔍 DEBUG: No main controller or get_active_filters method")
             return True  # No main controller, skip filtering
         
         active_filters = self.main_controller.get_active_filters()
-        print(f"🔍 DEBUG: Active filters from main controller: {active_filters}")
+        debug(f"🔍 DEBUG: Active filters from main controller: {active_filters}")
         
         if not active_filters:
-            print(f"🔍 DEBUG: No active filters found")
+            debug(f"🔍 DEBUG: No active filters found")
             return True  # No active filters
         
         # Apply each filter type with AND logic between all filter types
@@ -396,7 +396,7 @@ class SearchController:
             if not filter_values:
                 continue
             
-            print(f"🔍 DEBUG: Checking filter type '{filter_type}' with values: {filter_values}")
+            debug(f"🔍 DEBUG: Checking filter type '{filter_type}' with values: {filter_values}")
             
             # Handle different filter types
             if filter_type == "search":
@@ -405,12 +405,12 @@ class SearchController:
                 file_name = result.get('name', '').lower()
                 file_text = f"{file_path} {file_name}"
                 
-                print(f"🔍 DEBUG: Search filter - file text: '{file_text}'")
+                debug(f"🔍 DEBUG: Search filter - file text: '{file_text}'")
                 
                 # All search filter values must match (AND logic)
                 for search_term in filter_values:
                     if search_term.lower() not in file_text:
-                        print(f"🔍 DEBUG: Search term '{search_term}' not found in file text")
+                        warning(f"🔍 DEBUG: Search term '{search_term}' not found in file text")
                         return False  # This result doesn't match all search filters
                         
             elif filter_type == "instruments":
@@ -419,18 +419,18 @@ class SearchController:
                 file_name = result.get('name', '').lower()
                 file_text = f"{file_path} {file_name}"
                 
-                print(f"🔍 DEBUG: Instrument filter - file text: '{file_text}'")
+                debug(f"🔍 DEBUG: Instrument filter - file text: '{file_text}'")
                 
                 # At least one instrument filter must match (OR logic within instruments)
                 instrument_match = False
                 for instrument_term in filter_values:
                     if instrument_term.lower() in file_text:
                         instrument_match = True
-                        print(f"🔍 DEBUG: Instrument term '{instrument_term}' found in file text")
+                        debug(f"🔍 DEBUG: Instrument term '{instrument_term}' found in file text")
                         break
                 
                 if not instrument_match:
-                    print(f"🔍 DEBUG: No instrument terms found in file text")
+                    debug(f"🔍 DEBUG: No instrument terms found in file text")
                     return False  # This result doesn't match any instrument filter
                     
             elif filter_type == "genres":
@@ -439,18 +439,18 @@ class SearchController:
                 file_name = result.get('name', '').lower()
                 file_text = f"{file_path} {file_name}"
                 
-                print(f"🔍 DEBUG: Genre filter - file text: '{file_text}'")
+                debug(f"🔍 DEBUG: Genre filter - file text: '{file_text}'")
                 
                 # At least one genre filter must match (OR logic within genres)
                 genre_match = False
                 for genre_term in filter_values:
                     if genre_term.lower() in file_text:
                         genre_match = True
-                        print(f"🔍 DEBUG: Genre term '{genre_term}' found in file text")
+                        debug(f"🔍 DEBUG: Genre term '{genre_term}' found in file text")
                         break
                 
                 if not genre_match:
-                    print(f"🔍 DEBUG: No genre terms found in file text")
+                    debug(f"🔍 DEBUG: No genre terms found in file text")
                     return False  # This result doesn't match any genre filter
                     
             elif filter_type == "vendor":
@@ -459,21 +459,21 @@ class SearchController:
                 file_name = result.get('name', '').lower()
                 file_text = f"{file_path} {file_name}"
                 
-                print(f"🔍 DEBUG: Vendor filter - file text: '{file_text}'")
+                debug(f"🔍 DEBUG: Vendor filter - file text: '{file_text}'")
                 
                 # At least one vendor filter must match (OR logic within vendors)
                 vendor_match = False
                 for vendor_term in filter_values:
                     if vendor_term.lower() in file_text:
                         vendor_match = True
-                        print(f"🔍 DEBUG: Vendor term '{vendor_term}' found in file text")
+                        debug(f"🔍 DEBUG: Vendor term '{vendor_term}' found in file text")
                         break
                 
                 if not vendor_match:
-                    print(f"🔍 DEBUG: No vendor terms found in file text")
+                    debug(f"🔍 DEBUG: No vendor terms found in file text")
                     return False  # This result doesn't match any vendor filter
         
-        print(f"🔍 DEBUG: All filters passed for file: {result.get('name', '')}")
+        debug(f"🔍 DEBUG: All filters passed for file: {result.get('name', '')}")
         return True  # Result passed all filters
     
     def _perform_simple_search_dynamic(self, query: str, search_id: int):
@@ -562,7 +562,7 @@ class SearchController:
                         
                         # Debug print for keywords
                         if keywords:
-                            print(f"[DEBUG] File: {file_name} → Keywords: {keywords}")
+                            debug(f"[DEBUG] File: {file_name} → Keywords: {keywords}")
                         
                         tags = self.search_model.get_genre_keywords(file_path)
                         tags_str = ' • '.join(tags) if tags else ''
@@ -627,7 +627,7 @@ class SearchController:
                 
                 # Debug print for keywords
                 if keywords:
-                    print(f"[DEBUG] File: {result['name']} → Keywords: {keywords}")
+                    debug(f"[DEBUG] File: {result['name']} → Keywords: {keywords}")
                 
                 tags = self.search_model.get_genre_keywords(result['path'])
                 tags_str = ' • '.join(tags) if tags else ''
@@ -636,7 +636,7 @@ class SearchController:
                 enhanced_result = {
                     "name": result['name'],
                     "path": result['path'],
-                    "library_name": result.get('library', 'Unknown Library'),
+                    "library_name": result.get('project') or result.get('library', 'Unknown Library'),
                     "file_type": result.get('file_type', 'File'),
                     "keywords": keywords_str,
                     "tags": tags_str,
@@ -702,7 +702,7 @@ class SearchController:
             
             # Debug print for keywords
             if keywords:
-                print(f"[DEBUG] File: {result['name']} → Keywords: {keywords}")
+                debug(f"[DEBUG] File: {result['name']} → Keywords: {keywords}")
             
             tags = self.search_model.get_genre_keywords(result['path'])
             result['tags'] = ' • '.join(tags) if tags else ''
@@ -749,7 +749,7 @@ class SearchController:
             
             # Debug print for keywords
             if keywords:
-                print(f"[DEBUG] File: {result['name']} → Keywords: {keywords}")
+                debug(f"[DEBUG] File: {result['name']} → Keywords: {keywords}")
             
             tags = self.search_model.get_genre_keywords(result['path'])
             result['tags'] = ' • '.join(tags) if tags else ''
