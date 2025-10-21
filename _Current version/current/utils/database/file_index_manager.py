@@ -1277,7 +1277,7 @@ class FileIndexManager:
                      file_hash, vendor, library, project, old_path))
                 
                 if cursor.rowcount > 0:
-                    info(f"🔄 Moved file: {os.path.basename(old_path)} -> {file_name}")
+                    info(f"🔄 Moved file index_manager: {os.path.basename(old_path)} -> {file_name}")
                 else:
                     # File not in database, add it
                     self._handle_file_created(cursor, new_path)

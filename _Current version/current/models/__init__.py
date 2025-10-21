@@ -7,4 +7,4 @@ from .search_model import SearchModel
 from .user_settings_model import UserSettingsModel
 from .file_model import FileModel
 
-__all__ = ['SearchModel', 'UserSettingsModel', 'FileModel'] 
+__all__ = ["SearchModel", "UserSettingsModel", "FileModel"]

@@ -14,6 +14,7 @@ _Current version/current/build/
 # PyInstaller
 dist/
 build/
+venv/
 
 # Python
 __pycache__/
