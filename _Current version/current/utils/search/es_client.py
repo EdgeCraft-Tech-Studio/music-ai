@@ -58,6 +58,8 @@ class ESClient:
 
     def ping(self) -> bool:
         c = self.client()
+        test = bool(c.ping())
+        debug(f"🔌 Elasticsearch ping...{test}")
         if not c:
             return False
         try:

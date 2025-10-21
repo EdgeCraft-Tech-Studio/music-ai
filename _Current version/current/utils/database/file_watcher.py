@@ -1198,7 +1198,7 @@ class PatchIOFileHandler(FileSystemEventHandler):
 
             if cursor.rowcount > 0:
                 info(
-                    "🔄 Moved file: {} -> {}".format(
+                    "🔄 Moved file watcher: {} -> {}".format(
                         os.path.basename(old_path), new_name
                     )
                 )

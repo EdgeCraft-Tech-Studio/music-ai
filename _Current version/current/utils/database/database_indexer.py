@@ -69,6 +69,27 @@ class DatabaseIndexer:
         # Initialize database
         self._init_database()
 
+        # Elasticsearch sync
+        self.es_sync = None
+        try:
+            from settings.core_settings import ELASTICSEARCH_ENABLED
+
+            if ELASTICSEARCH_ENABLED:
+                from utils.search.es_sync import ESSync
+
+                self.es_sync = ESSync(
+                    self.db_path
+                    if os.path.isabs(self.db_path)
+                    else os.path.abspath(self.db_path)
+                )
+                if self.es_sync.is_enabled():
+                    print("🔗 ES sync is enabled for indexer batches")
+                else:
+                    self.es_sync = None
+        except Exception as e:
+            print(f"⚠️ ES sync init failed: {e}")
+            self.es_sync = None
+
     def _init_database(self):
         """Initialize SQLite database with required tables"""
         try:
@@ -493,6 +514,26 @@ class DatabaseIndexer:
 
             self.conn.commit()
             print(f"✅ Inserted {len(files_data)} file records")
+
+            # Optional: push same batch to ES for near-real-time availability
+            if self.es_sync:
+                try:
+                    actions = []
+                    for rec in files_data:
+                        # We re-use the SQLite row-to-ES transform from ESSync
+                        from utils.search.es_sync import to_es_doc
+
+                        # Synthesize row dict with created_at (now)
+                        row = dict(rec)
+                        row.setdefault("created_at", int(time.time()))
+                        doc = to_es_doc(row)
+                        actions.append(
+                            {"_op_type": "index", "_id": doc["path"], "_source": doc}
+                        )
+                    if actions:
+                        self.es_sync.es.bulk(actions)
+                except Exception as e:
+                    print(f"⚠️ ES bulk failed (non-fatal): {e}")
 
         except Exception as e:
             print(f"❌ Error inserting files: {e}")

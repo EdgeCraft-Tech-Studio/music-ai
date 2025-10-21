@@ -162,58 +162,6 @@ class ESSync:
         info(f"✅ ES full sync completed: {total} documents")
         return total
 
-    def upsert_one_by_path(self, path: str) -> bool:
-        """
-        Fetch a single record from SQLite by path and upsert into ES.
-        """
-        if not self.enabled:
-            return False
-        conn = self._connect_sqlite()
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT path, name, extension, file_type, parent_folder, 
-                  modified_time, bpm, key, vendor, library, keywords, tags,
-                  instrument, genre, mood, format, created_at
-            FROM files
-            WHERE path = ?
-            """,
-            (path,),
-        )
-        row = cursor.fetchone()
-        conn.close()
-        if not row:
-            # if not found in DB, delete from ES
-            return self.es.delete_doc(path)
-
-        cols = [
-            "path",
-            "name",
-            "extension",
-            "file_type",
-            "parent_folder",
-            "modified_time",
-            "bpm",
-            "key",
-            "vendor",
-            "library",
-            "keywords",
-            "tags",
-            "instrument",
-            "genre",
-            "mood",
-            "format",
-            "created_at",
-        ]
-        data = dict(zip(cols, row))
-        doc = to_es_doc(data)
-        return self.es.index_doc(path, doc)
-
-    def delete_by_path(self, path: str) -> bool:
-        if not self.enabled:
-            return False
-        return self.es.delete_doc(path)
-
     def incremental_sync_since(
         self, since_epoch_seconds: int, bulk_size: int = None
     ) -> int:

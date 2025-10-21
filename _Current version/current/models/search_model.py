@@ -24,6 +24,8 @@ try:
         MAX_RESULTS_PER_LIBRARY,
         MAX_TOTAL_RESULTS,
         GENRE_KEYWORDS,
+        ELASTICSEARCH_ENABLED,
+        ELASTICSEARCH_MAX_RESULTS,
     )
 
     # Try to import logger, but don't fail if it's not initialized yet
@@ -87,6 +89,33 @@ class SearchModel:
 
         # Database path for index search - use app data folder
         self.db_path = self._get_database_path()
+
+        # ES client (lazy)
+        self._es_client = None
+        self._es_enabled = bool(ELASTICSEARCH_ENABLED)
+        self._init_es_if_available()
+
+    def _init_es_if_available(self):
+        if not self._es_enabled:
+            return
+        try:
+            from utils.search.es_client import ESClient
+
+            es = ESClient()
+            if es.is_enabled() and es.ping():
+                es.ensure_index()
+                self._es_client = es
+                info(
+                    "🔌 Elasticsearch is available; SearchModel will use ES for search"
+                )
+            else:
+                warning("⚠️ Elasticsearch not reachable; falling back to SQLite search")
+                self._es_enabled = False
+                self._es_client = None
+        except Exception as e:
+            warning(f"⚠️ Elasticsearch init failed: {e}")
+            self._es_enabled = False
+            self._es_client = None
 
     def _get_database_path(self) -> str:
         """Get the database path using the same method as other settings files"""
@@ -167,6 +196,10 @@ class SearchModel:
             warning("⚠️ Test search setup failed: {}".format(e))
             warning("⚠️ Continuing without test results")
 
+    # --------------------
+    # Public search APIs
+    # --------------------
+
     def simple_search(self, query: str) -> List[Dict[str, Any]]:
         """Perform simple filename search"""
         info(f"📁 Simple Search: {query}")
@@ -196,17 +229,12 @@ class SearchModel:
         results = []
         excluded_folders = []  # Using dummy empty list as requested
 
-        # Search each folder using the exact patchio.py logic
         for folder in self.search_folders:
             if not folder.exists():
                 warning(f"⚠️ Folder doesn't exist: {folder}")
                 continue
-
             debug(f"📂 Searching in: {folder}")
-            folder_matches = 0
-
             try:
-                # Use the exact recursive_scan from patchio.py
                 for file_path in self._recursive_scan(
                     str(folder), self.selected_extensions, excluded_folders
                 ):
@@ -217,40 +245,173 @@ class SearchModel:
                         self._matches_term(term, full_path, quoted)
                         for term, quoted in zip(or_terms, or_quoted)
                     ):
-                        folder_matches += 1
-
-                        # Get file info
-                        file_name = os.path.basename(file_path)
-
                         results.append(
                             {
-                                "name": file_name,
+                                "name": os.path.basename(file_path),
                                 "path": file_path,
                                 "type": f"Simple Match in {folder.name}",
                                 "is_audio": True,  # All results are audio files due to extension filtering
                             }
                         )
-
-                        debug(f"  ✅ Found match: {file_name}")
-
-                        # NO ARTIFICIAL LIMIT - find ALL matching files like original patchio.py
-
+                        debug(f"  ✅ Found match: {os.path.basename(file_path)}")
             except Exception as e:
                 warning(f"  ⚠️ Cannot search in {folder}: {e}")
                 continue
 
-            debug(f"  📊 Folder {folder.name}: {folder_matches} matches")
-
         info(f"📊 Simple search found {len(results)} matching files")
-
         if len(results) == 0:
             info(f"💡 No files found matching '{query}'. Try different search terms.")
-
         return results
 
     def database_search(self, query: str) -> List[Dict[str, Any]]:
-        """Perform search using the index database across all columns"""
-        info(f"🗄️ Database Search: {query}")
+        """
+        The controller calls this. We transparently use ES if available,
+        otherwise fallback to SQLite query as before.
+        """
+        if self._es_client:
+            try:
+                return self.elasticsearch_search(query)
+            except Exception as e:
+                warning(f"⚠️ Elasticsearch search failed, falling back to SQLite: {e}")
+        return self.sqlite_database_search(query)
+
+    # --------------------
+    # Elasticsearch search
+    # --------------------
+
+    def _build_es_bool_query(self, query_text: str) -> Dict[str, Any]:
+        """
+        Convert the bubble query into ES bool query format.
+        """
+        or_terms, and_terms, not_terms, or_quoted, and_quoted, not_quoted = (
+            self._parse_bubble_query(query_text.strip())
+        )
+
+        def term_to_query(term: str, quoted: bool):
+            # For quoted: phrase match; else: multi_match with fuzziness
+            if quoted:
+                return {
+                    "multi_match": {
+                        "query": term,
+                        "type": "phrase",
+                        "fields": [
+                            "name^5",
+                            "library^4",
+                            "vendor^4",
+                            "fulltext^2",
+                            "path",
+                            "genre",
+                            "instrument",
+                            "tags",
+                        ],
+                        "slop": 2,
+                    }
+                }
+            else:
+                # Multi_match with fuzziness
+                multi_match = {
+                    "multi_match": {
+                        "query": term,
+                        "operator": "and",
+                        "fuzziness": "AUTO",
+                        "fields": [
+                            "name^5",
+                            "library^4",
+                            "vendor^4",
+                            "fulltext^2",
+                            "path",
+                            "genre",
+                            "instrument",
+                            "tags",
+                        ],
+                    }
+                }
+
+                # Additional optional queries
+            term_query = {"term": {"vendor.raw": term.lower()}}  # exact vendor match
+            exists_query = {
+                "exists": {"field": "instrument"}
+            }  # example: has instrument
+            prefix_query = {"prefix": {"name": term.lower()}}  # autocomplete-like
+            wildcard_query = {"wildcard": {"path": f"*{term}*"}}  # path pattern match
+
+            # Combine them in a bool should to boost relevance
+            return {
+                "bool": {
+                    "should": [multi_match, term_query, prefix_query, wildcard_query],
+                    "minimum_should_match": 1,
+                }
+            }
+
+        must = []
+        should = []
+        must_not = []
+
+        for term, quoted in zip(and_terms, and_quoted):
+            must.append(term_to_query(term, quoted))
+
+        for term, quoted in zip(or_terms, or_quoted):
+            should.append(term_to_query(term, quoted))
+
+        for term, quoted in zip(not_terms, not_quoted):
+            must_not.append(term_to_query(term, quoted))
+
+        # If only OR terms, ensure at least one matches
+        bool_query = {"must": must, "should": should, "must_not": must_not}
+        if should and not must:
+            bool_query["minimum_should_match"] = 1
+
+        return {"bool": bool_query}
+
+    def elasticsearch_search(self, query_text: str) -> List[Dict[str, Any]]:
+        """
+        Perform ES search and map results to the format expected by controller.
+        """
+        if not query_text or not query_text.strip():
+            warning("⚠️ Empty search query!")
+            return []
+
+        if not self._es_client:
+            return []
+
+        debug(f"🧠 ES building query for: {query_text}")
+        q = self._build_es_bool_query(query_text)
+
+        size = min(ELASTICSEARCH_MAX_RESULTS, MAX_TOTAL_RESULTS)
+        sort = [{"_score": "desc"}, {"name.raw": "asc"}]  # Stable within score
+        res = self._es_client.search({"query": q, "sort": sort}, size=size)
+        debug(f"🧠 ES query result: {res}")
+
+        hits = res.get("hits", {}).get("hits", [])
+        results = []
+        for h in hits:
+            src = h.get("_source", {})
+            results.append(
+                {
+                    "id": src.get("path", ""),
+                    "name": src.get("name", "")
+                    or os.path.basename(src.get("path", "")),
+                    "path": src.get("path", ""),
+                    "vendor": src.get("vendor", "Unknown Vendor") or "Unknown Vendor",
+                    "library": src.get("library", "Unknown Library")
+                    or "Unknown Library",
+                    "instrument": ", ".join(src.get("instrument", [])),
+                    "genre": ", ".join(src.get("genre", [])),
+                    "tags": " • ".join(src.get("tags", [])),
+                    "file_type": src.get("file_type", "File") or "File",
+                    "type": "Elasticsearch Match",
+                    "is_audio": True,
+                }
+            )
+
+        info(f"📊 ES search found {len(results)} matching files")
+        return results
+
+    # --------------------
+    # SQLite fallback search (unchanged logic)
+    # --------------------
+    def sqlite_database_search(self, query: str) -> List[Dict[str, Any]]:
+        info(f"🗄️ Database Search (SQLite): {query}")
 
         if not os.path.exists(self.db_path):
             warning(f"⚠️ Database not found: {self.db_path}")
@@ -283,121 +444,66 @@ class SearchModel:
             cursor = conn.cursor()
 
             # Build SQL query for searching across all columns
-            # Search in: path, name, vendor, library, instrument, genre, tags
             search_conditions = []
             params = []
 
-            # OR conditions - at least one must match
+            # OR conditions
             if or_terms:
                 or_conditions = []
                 for term, quoted in zip(or_terms, or_quoted):
-                    if quoted:
-                        # Exact phrase match
-                        or_conditions.append(
-                            """
-                            (LOWER(path) LIKE ? OR 
-                             LOWER(name) LIKE ? OR 
-                             LOWER(vendor) LIKE ? OR 
-                             LOWER(library) LIKE ? OR 
-                             LOWER(instrument) LIKE ? OR 
-                             LOWER(genre) LIKE ? OR 
-                             LOWER(tags) LIKE ?)
+                    or_conditions.append(
                         """
-                        )
-                        search_param = f"%{term.lower()}%"
-                        params.extend([search_param] * 7)  # 7 columns
-                    else:
-                        # Word boundary match for unquoted terms
-                        or_conditions.append(
-                            """
-                            (LOWER(path) LIKE ? OR 
-                             LOWER(name) LIKE ? OR 
-                             LOWER(vendor) LIKE ? OR 
-                             LOWER(library) LIKE ? OR 
-                             LOWER(instrument) LIKE ? OR 
-                             LOWER(genre) LIKE ? OR 
-                             LOWER(tags) LIKE ?)
+                        (LOWER(path) LIKE ? OR 
+                        LOWER(name) LIKE ? OR 
+                        LOWER(vendor) LIKE ? OR 
+                        LOWER(library) LIKE ? OR 
+                        LOWER(instrument) LIKE ? OR 
+                        LOWER(genre) LIKE ? OR 
+                        LOWER(tags) LIKE ?)
                         """
-                        )
-                        search_param = f"%{term.lower()}%"
-                        params.extend([search_param] * 7)  # 7 columns
-
+                    )
+                    search_param = f"%{term.lower()}%"
+                    params.extend([search_param] * 7)
                 if or_conditions:
                     search_conditions.append(f"({' OR '.join(or_conditions)})")
 
-            # AND conditions - all must match
+            # AND conditions
             if and_terms:
                 and_conditions = []
                 for term, quoted in zip(and_terms, and_quoted):
-                    if quoted:
-                        # Exact phrase match
-                        and_conditions.append(
-                            """
-                            (LOWER(path) LIKE ? OR 
-                             LOWER(name) LIKE ? OR 
-                             LOWER(vendor) LIKE ? OR 
-                             LOWER(library) LIKE ? OR 
-                             LOWER(instrument) LIKE ? OR 
-                             LOWER(genre) LIKE ? OR 
-                             LOWER(tags) LIKE ?)
+                    and_conditions.append(
                         """
-                        )
-                        search_param = f"%{term.lower()}%"
-                        params.extend([search_param] * 7)  # 7 columns
-                    else:
-                        # Word boundary match for unquoted terms
-                        and_conditions.append(
-                            """
-                            (LOWER(path) LIKE ? OR 
-                             LOWER(name) LIKE ? OR 
-                             LOWER(vendor) LIKE ? OR 
-                             LOWER(library) LIKE ? OR 
-                             LOWER(instrument) LIKE ? OR 
-                             LOWER(genre) LIKE ? OR 
-                             LOWER(tags) LIKE ?)
+                        (LOWER(path) LIKE ? OR 
+                        LOWER(name) LIKE ? OR 
+                        LOWER(vendor) LIKE ? OR 
+                        LOWER(library) LIKE ? OR 
+                        LOWER(instrument) LIKE ? OR 
+                        LOWER(genre) LIKE ? OR 
+                        LOWER(tags) LIKE ?)
                         """
-                        )
-                        search_param = f"%{term.lower()}%"
-                        params.extend([search_param] * 7)  # 7 columns
-
+                    )
+                    search_param = f"%{term.lower()}%"
+                    params.extend([search_param] * 7)
                 if and_conditions:
                     search_conditions.append(f"({' AND '.join(and_conditions)})")
 
-            # NOT conditions - none should match
+            # NOT conditions
             if not_terms:
                 not_conditions = []
                 for term, quoted in zip(not_terms, not_quoted):
-                    if quoted:
-                        # Exact phrase exclusion
-                        not_conditions.append(
-                            """
-                            NOT (LOWER(path) LIKE ? OR 
-                                 LOWER(name) LIKE ? OR 
-                                 LOWER(vendor) LIKE ? OR 
-                                 LOWER(library) LIKE ? OR 
-                                 LOWER(instrument) LIKE ? OR 
-                                 LOWER(genre) LIKE ? OR 
-                                 LOWER(tags) LIKE ?)
+                    not_conditions.append(
                         """
-                        )
-                        search_param = f"%{term.lower()}%"
-                        params.extend([search_param] * 7)  # 7 columns
-                    else:
-                        # Word boundary exclusion for unquoted terms
-                        not_conditions.append(
-                            """
-                            NOT (LOWER(path) LIKE ? OR 
-                                 LOWER(name) LIKE ? OR 
-                                 LOWER(vendor) LIKE ? OR 
-                                 LOWER(library) LIKE ? OR 
-                                 LOWER(instrument) LIKE ? OR 
-                                 LOWER(genre) LIKE ? OR 
-                                 LOWER(tags) LIKE ?)
+                        NOT (LOWER(path) LIKE ? OR 
+                            LOWER(name) LIKE ? OR 
+                            LOWER(vendor) LIKE ? OR 
+                            LOWER(library) LIKE ? OR 
+                            LOWER(instrument) LIKE ? OR 
+                            LOWER(genre) LIKE ? OR 
+                            LOWER(tags) LIKE ?)
                         """
-                        )
-                        search_param = f"%{term.lower()}%"
-                        params.extend([search_param] * 7)  # 7 columns
-
+                    )
+                    search_param = f"%{term.lower()}%"
+                    params.extend([search_param] * 7)
                 if not_conditions:
                     search_conditions.append(f"({' AND '.join(not_conditions)})")
 
@@ -409,14 +515,18 @@ class SearchModel:
                     FROM files 
                     WHERE {where_clause}
                     ORDER BY name
+                    LIMIT ?
                 """
             else:
                 sql_query = """
                     SELECT id, path, name, vendor, library, instrument, genre, tags, file_type
                     FROM files 
                     ORDER BY name
+                    LIMIT ?
                 """
 
+            # Limit to keep UI responsive
+            params.append(min(MAX_TOTAL_RESULTS, 1000))
             debug(f"🔍 Executing SQL: {sql_query}")
             debug(f"🔍 Parameters: {params}")
 
@@ -436,26 +546,23 @@ class SearchModel:
                     file_type,
                 ) = row
 
-                # Get file info
                 file_name = os.path.basename(path) if path else name
 
-                # Create result
-                result = {
-                    "id": file_id,
-                    "name": file_name,
-                    "path": path or "",
-                    "vendor": vendor or "Unknown Vendor",
-                    "library": library or "Unknown Library",
-                    "instrument": instrument or "",
-                    "genre": genre or "",
-                    "tags": tags or "",
-                    "file_type": file_type or "File",
-                    "type": f"Database Match",
-                    "is_audio": True,
-                }
-
-                results.append(result)
-                debug(f"  ✅ Found match: {file_name}")
+                results.append(
+                    {
+                        "id": file_id,
+                        "name": file_name,
+                        "path": path or "",
+                        "vendor": vendor or "Unknown Vendor",
+                        "library": library or "Unknown Library",
+                        "instrument": instrument or "",
+                        "genre": genre or "",
+                        "tags": tags or "",
+                        "file_type": file_type or "File",
+                        "type": "Database Match",
+                        "is_audio": True,
+                    }
+                )
 
             conn.close()
 
