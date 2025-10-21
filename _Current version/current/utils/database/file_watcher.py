@@ -1080,24 +1080,16 @@ class PatchIOFileHandler(FileSystemEventHandler):
             file_name = os.path.basename(file_path)
             file_type = Path(file_path).suffix.lower()
 
-            # Extract vendor, library, and project info using V3 with project detection
-            vendor, library, project = self._extract_vendor_library_from_path(file_path)
+            # Extract vendor and library info using proper detection method
+            vendor, library = self._extract_vendor_library_from_path(file_path)
 
             # Insert into database
             cursor.execute(
                 """
-                INSERT INTO files (path, name, vendor, library, project, file_type, modified_time)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO files (path, name, vendor, library, file_type, modified_time)
+                VALUES (?, ?, ?, ?, ?, ?)
             """,
-                (
-                    file_path,
-                    file_name,
-                    vendor,
-                    library,
-                    project,
-                    file_type,
-                    stat.st_mtime,
-                ),
+                (file_path, file_name, vendor, library, file_type, stat.st_mtime),
             )
 
             info("➕ Added file: {}".format(file_name))
@@ -1193,18 +1185,15 @@ class PatchIOFileHandler(FileSystemEventHandler):
 
             # Update path and other info
             new_name = os.path.basename(new_path)
-            # 🚀 NEW: Use V3 extractor with project detection
-            new_vendor, new_library, new_project = (
-                self._extract_vendor_library_from_path(new_path)
-            )
+            new_vendor, new_library = self._simple_extract_vendor_library(new_path)
 
             cursor.execute(
                 """
                 UPDATE files 
-                SET path = ?, name = ?, vendor = ?, library = ?, project = ?
+                SET path = ?, name = ?, vendor = ?, library = ?
                 WHERE path = ?
             """,
-                (new_path, new_name, new_vendor, new_library, new_project, old_path),
+                (new_path, new_name, new_vendor, new_library, old_path),
             )
 
             if cursor.rowcount > 0:
@@ -1254,12 +1243,7 @@ class PatchIOFileHandler(FileSystemEventHandler):
 
             if os.path.exists(knowledge_db_path):
                 knowledge_db = KnowledgeDatabase(knowledge_db_path)
-                # 🚀 NEW: Use V3 extractor (fast pattern-based extraction)
-                from utils.database.library_extractor_v3 import LibraryExtractorV3
-
-                if not hasattr(self, "_v3_extractor"):
-                    self._v3_extractor = LibraryExtractorV3(use_knowledge_db=True)
-                return self._v3_extractor.extract_vendor_library(file_path)
+                return knowledge_db.extract_vendor_library(file_path)
             else:
                 # Fallback to simple extraction if knowledge database not available
                 return self._simple_extract_vendor_library(file_path)
@@ -1269,15 +1253,58 @@ class PatchIOFileHandler(FileSystemEventHandler):
             return self._simple_extract_vendor_library(file_path)
 
     def _simple_extract_vendor_library(self, file_path: str) -> tuple:
-        """
-        Simple fallback vendor/library extraction.
-        🚀 NEW: Uses V3 extractor for accurate extraction.
-        """
-        from utils.database.library_extractor_v3 import LibraryExtractorV3
+        """Simple fallback vendor/library extraction"""
+        path_parts = Path(file_path).parts
 
-        if not hasattr(self, "_v3_extractor"):
-            self._v3_extractor = LibraryExtractorV3(use_knowledge_db=True)
-        return self._v3_extractor.extract_vendor_library(file_path)
+        # Skip volume names and common system folders
+        skip_parts = {
+            "volumes",
+            "users",
+            "applications",
+            "desktop",
+            "documents",
+            "downloads",
+            "samples",
+            "patches",
+            "instruments",
+            "presets",
+        }
+
+        # Look for common vendor names in path
+        vendor_keywords = [
+            "native instruments",
+            "spitfire",
+            "heavyocity",
+            "eastwest",
+            "cinesamples",
+            "synthogy",
+            "apple",
+            "steinberg",
+            "image-line",
+            "avid",
+            "cockos",
+            "bitwig",
+            "reason studios",
+        ]
+
+        vendor = "Unknown Vendor"
+        library = "Unknown Library"
+
+        for i, part in enumerate(path_parts):
+            part_lower = part.lower()
+            if part_lower in skip_parts or len(part) > 20:
+                continue
+            for vendor_keyword in vendor_keywords:
+                if vendor_keyword in part_lower:
+                    vendor = vendor_keyword.title()
+                    # Library is usually the next folder after vendor
+                    if i + 1 < len(path_parts):
+                        next_part = path_parts[i + 1]
+                        if next_part.lower() not in skip_parts and len(next_part) <= 30:
+                            library = next_part
+                    break
+
+        return vendor, library
 
     # File system event handlers
     def on_created(self, event):
@@ -1409,7 +1436,7 @@ class PatchIOFileWatcher:
 # Test function
 def test_file_watcher():
     """Test the file watcher functionality"""
-    debug("🧪 Testing PatchIO File Watcher")
+    print("🧪 Testing PatchIO File Watcher")
 
     # Get database path
     import appdirs
@@ -1427,21 +1454,21 @@ def test_file_watcher():
     try:
         # Start watcher
         watcher.start()
-        debug("✅ File watcher started")
+        print("✅ File watcher started")
 
         # Show status
         status = watcher.get_status()
-        debug("📊 Status:", status)
+        print("📊 Status:", status)
 
         # Keep running for a bit
-        debug("👀 Watching for file changes... (Press Ctrl+C to stop)")
+        print("👀 Watching for file changes... (Press Ctrl+C to stop)")
         time.sleep(10)
 
     except KeyboardInterrupt:
-        info("\n🛑 Stopping file watcher...")
+        print("\n🛑 Stopping file watcher...")
     finally:
         watcher.stop()
-        info("✅ Test completed")
+        print("✅ Test completed")
 
 
 if __name__ == "__main__":

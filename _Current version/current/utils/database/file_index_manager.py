@@ -18,60 +18,63 @@ from typing import Set, Dict, List, Optional, Tuple, Callable
 from collections import defaultdict
 
 # Add parent directory to path for imports
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+sys.path.append(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+)
 
 from utils.logger import info, warning, error, debug
 from settings.core_settings import DEFAULT_EXTENSIONS
 
+
 class FileIndexManager:
     """Comprehensive file index management system"""
-    
+
     def __init__(self, db_path: str, indexed_folders: Set[str]):
         self.db_path = db_path
         self.indexed_folders = indexed_folders
         self.supported_extensions = set(DEFAULT_EXTENSIONS)
-        
-        # 🚀 NEW: Cache known library names for robust audio file extraction
-        self._known_libraries_cache = None
         self.file_watcher = None
         self.is_monitoring = False
         self._lock = threading.Lock()
-        
+
         # 🚀 PROFESSIONAL OPTIMIZATIONS
         # Pre-compile extension patterns for 100x faster filtering
         self._compiled_extensions = self._compile_extension_patterns()
-        
+
         # Pre-compile system file patterns
         self._system_file_patterns = self._compile_system_patterns()
-        
+
         # Batch processing settings
         self.batch_size = 1000  # Process files in batches
         self.progress_callback = None  # For progress reporting
-        
+
         # Statistics
         self.stats = {
-            'files_scanned': 0,
-            'files_added': 0,
-            'files_removed': 0,
-            'files_updated': 0,
-            'files_renamed': 0,
-            'sync_time': 0.0
+            "files_scanned": 0,
+            "files_added": 0,
+            "files_removed": 0,
+            "files_updated": 0,
+            "files_renamed": 0,
+            "sync_time": 0.0,
         }
-        
+
         # Initialize database
         self._initialize_database()
-        
+
         info(f"📁 File Index Manager initialized for {len(indexed_folders)} folders")
-        info(f"🚀 Professional optimizations enabled: {len(self._compiled_extensions)} extensions, batch size {self.batch_size}")
-    
+        info(
+            f"🚀 Professional optimizations enabled: {len(self._compiled_extensions)} extensions, batch size {self.batch_size}"
+        )
+
     def _initialize_database(self):
         """Initialize database with required tables and indexes"""
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            
+
             # Create files table with comprehensive schema
-            cursor.execute('''
+            cursor.execute(
+                """
                 CREATE TABLE IF NOT EXISTS files (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     path TEXT UNIQUE NOT NULL,
@@ -86,7 +89,6 @@ class FileIndexManager:
                     key TEXT,
                     vendor TEXT,
                     library TEXT,
-                    project TEXT,
                     keywords TEXT,
                     tags TEXT,
                     instrument TEXT,
@@ -96,211 +98,105 @@ class FileIndexManager:
                     created_at REAL DEFAULT (strftime('%s', 'now')),
                     updated_at REAL DEFAULT (strftime('%s', 'now'))
                 )
-            ''')
-            
+            """
+            )
+
             # Create file_hashes table for efficient change detection
-            cursor.execute('''
+            cursor.execute(
+                """
                 CREATE TABLE IF NOT EXISTS file_hashes (
                     path TEXT PRIMARY KEY,
                     file_hash TEXT NOT NULL,
                     modified_time REAL NOT NULL,
                     file_size INTEGER NOT NULL
                 )
-            ''')
-            
+            """
+            )
+
             # Create last_sync table for intelligent sync
-            cursor.execute('''
+            cursor.execute(
+                """
                 CREATE TABLE IF NOT EXISTS last_sync (
                     id INTEGER PRIMARY KEY,
                     last_sync_time REAL,
                     indexed_folders TEXT,
                     sync_type TEXT
                 )
-            ''')
-            
+            """
+            )
+
             # Create indexes for performance
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_files_path ON files(path)')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_files_vendor ON files(vendor)')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_files_library ON files(library)')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_files_project ON files(project)')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_files_modified_time ON files(modified_time)')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_files_hash ON files(file_hash)')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_file_hashes_path ON file_hashes(path)')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_file_hashes_hash ON file_hashes(file_hash)')
-            
-            # Migrate existing databases (add project column if it doesn't exist)
-            cursor.execute("PRAGMA table_info(files)")
-            columns = [col[1] for col in cursor.fetchall()]
-            if 'project' not in columns:
-                cursor.execute('ALTER TABLE files ADD COLUMN project TEXT')
-                info("✅ Added 'project' column to existing database")
-            
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_files_path ON files(path)")
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_files_vendor ON files(vendor)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_files_library ON files(library)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_files_modified_time ON files(modified_time)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_files_hash ON files(file_hash)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_file_hashes_path ON file_hashes(path)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_file_hashes_hash ON file_hashes(file_hash)"
+            )
+
             conn.commit()
             conn.close()
-            
+
         except Exception as e:
             error(f"❌ Error initializing database: {e}")
             raise
-    
-    def _prescan_projects(self) -> Dict[str, str]:
-        """
-        🚀 Pre-scan all indexed folders for DAW projects.
-        Returns a map of {folder_path: project_name} for instant lookup.
-        
-        This is MUCH faster than checking during file indexing because:
-        - Only scans each folder once
-        - No repeated os.listdir() calls
-        - Typical scan: 39,000+ folders/second
-        """
-        info("🎵 Pre-scanning folders for DAW projects...")
-        
-        PROJECT_EXTENSIONS = {'.cpr', '.logicx', '.als', '.flp', '.ptx', '.song', '.rpp'}
-        project_map = {}
-        total_folders = 0
-        projects_found = 0
-        start_time = time.time()
-        
-        for folder in self.indexed_folders:
-            if not os.path.exists(folder):
-                continue
-            
-            for root, dirs, files in os.walk(folder):
-                total_folders += 1
-                
-                # Check if this folder has a project file OR project folder (Logic .logicx)
-                found_project = False
-                
-                # Check files (.cpr, .als, .flp, .ptx, .song, .rpp)
-                for file in files:
-                    if any(file.lower().endswith(ext) for ext in PROJECT_EXTENSIONS):
-                        project_name = os.path.basename(root)
-                        project_map[root] = project_name
-                        projects_found += 1
-                        found_project = True
-                        break
-                
-                # Also check directories for Logic projects (.logicx)
-                if not found_project:
-                    for dir_name in dirs:
-                        if dir_name.lower().endswith('.logicx'):
-                            project_name = os.path.basename(root)
-                            project_map[root] = project_name
-                            projects_found += 1
-                            break
-        
-        elapsed = time.time() - start_time
-        rate = total_folders / elapsed if elapsed > 0 else 0
-        
-        info(f"✅ Project pre-scan complete: {projects_found} projects found in {total_folders:,} folders ({rate:.0f} folders/sec, {elapsed:.2f}s)")
-        
-        return project_map
-    
-    def _update_projects_in_database(self):
-        """
-        🚀 Update project column for audio files in project folders.
-        Uses the pre-scanned project_map for instant lookup.
-        """
-        if not hasattr(self, '_project_map') or not self._project_map:
-            return
-        
-        info("🎵 Updating project information for audio files...")
-        
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        try:
-            # Get all audio files (only these can be in projects)
-            cursor.execute("""
-                SELECT path FROM files 
-                WHERE name LIKE '%.wav' OR name LIKE '%.aiff' OR name LIKE '%.mp3' 
-                   OR name LIKE '%.flac' OR name LIKE '%.ogg'
-            """)
-            audio_files = cursor.fetchall()
-            
-            if not audio_files:
-                conn.close()
-                return
-            
-            # For each audio file, check if it's in a project folder
-            updates = []
-            for (file_path,) in audio_files:
-                project_name = None
-                parts = Path(file_path).parts
-                
-                # 🚀 PRIORITY: Check if .logicx is IN the path (file inside package)
-                for part in parts:
-                    if part.lower().endswith('.logicx'):
-                        project_name = part[:-7]  # Remove .logicx extension
-                        break
-                
-                # If not inside .logicx package, check project_map
-                if not project_name:
-                    for i in range(len(parts) - 1, max(0, len(parts) - 6), -1):
-                        folder = os.path.join('/', *parts[:i+1])
-                        if folder in self._project_map:
-                            project_name = self._project_map[folder]
-                            break
-                
-                if project_name:
-                    updates.append((project_name, file_path))
-            
-            # Batch update all files in projects
-            if updates:
-                cursor.executemany("""
-                    UPDATE files 
-                    SET vendor = 'User', library = NULL, project = ?
-                    WHERE path = ?
-                """, updates)
-                
-                conn.commit()
-                info(f"✅ Updated {len(updates)} audio files with project information")
-            
-        except Exception as e:
-            warning(f"⚠️  Error updating projects: {e}")
-        finally:
-            conn.close()
-    
-    def sync_index_with_filesystem(self, force_full_sync: bool = False, progress_callback: Optional[Callable] = None) -> Dict:
+
+    def sync_index_with_filesystem(
+        self,
+        force_full_sync: bool = False,
+        progress_callback: Optional[Callable] = None,
+    ) -> Dict:
         """
         🚀 PROFESSIONAL file index synchronization with streaming and progress reporting
-        
+
         Args:
             force_full_sync: If True, performs full rescan regardless of timestamps
             progress_callback: Optional callback for progress updates (rate, ETA, etc.)
-            
+
         Returns:
             Dictionary with sync statistics
         """
         start_time = time.time()
         self.progress_callback = progress_callback
-        
+
         info("🔄 Starting PROFESSIONAL file index synchronization...")
-        info("🚀 Optimizations: Ultra-fast filtering, batch operations, streaming processing")
-        
+        info(
+            "🚀 Optimizations: Ultra-fast filtering, batch operations, streaming processing"
+        )
+
         with self._lock:
             try:
                 # Reset statistics
                 self.stats = {
-                    'files_scanned': 0,
-                    'files_added': 0,
-                    'files_removed': 0,
-                    'files_updated': 0,
-                    'files_renamed': 0,
-                    'sync_time': 0.0,
-                    'scan_rate': 0.0,
-                    'processing_rate': 0.0
+                    "files_scanned": 0,
+                    "files_added": 0,
+                    "files_removed": 0,
+                    "files_updated": 0,
+                    "files_renamed": 0,
+                    "sync_time": 0.0,
+                    "scan_rate": 0.0,
+                    "processing_rate": 0.0,
                 }
-                
-                # 🚀 PRE-SCAN: Find all DAW projects before indexing (ultra-fast)
-                self._project_map = self._prescan_projects()
-                
+
                 # Check if we can skip sync
                 if not force_full_sync and self._can_skip_sync():
                     info("⚡ Skipping sync - no significant changes detected")
-                    self.stats['sync_time'] = time.time() - start_time
+                    self.stats["sync_time"] = time.time() - start_time
                     # Note: We still return the stats, but the background worker will handle completion
                     return self.stats
-                
+
                 # 🚀 STREAMING PROCESSING - Handle unlimited file counts efficiently
                 if force_full_sync:
                     # For large collections, use streaming approach
@@ -309,292 +205,346 @@ class FileIndexManager:
                 else:
                     # For incremental sync, use traditional approach
                     info("📊 Using incremental sync approach...")
-                    
+
                     # Get current database state
                     db_files = self._get_database_files()
                     info(f"📊 Database contains {len(db_files)} files")
-                    
+
                     # Scan filesystem
                     fs_files = self._scan_filesystem()
                     info(f"📁 Filesystem contains {len(fs_files)} relevant files")
-                    
+
                     # Find and apply changes
                     changes = self._find_changes(db_files, fs_files)
                     self._apply_changes(changes)
-                    
-                    # 🚀 POST-PROCESS: Update project column for files in project folders
-                    if hasattr(self, '_project_map') and self._project_map:
-                        self._update_projects_in_database()
-                
+
                 # Update sync timestamp
-                self._update_last_sync_time('full_sync')
-                
+                self._update_last_sync_time("full_sync")
+
                 # Calculate sync time and rates
-                self.stats['sync_time'] = time.time() - start_time
-                if self.stats['sync_time'] > 0:
-                    self.stats['scan_rate'] = self.stats['files_scanned'] / self.stats['sync_time']
-                    total_processed = (self.stats['files_added'] + self.stats['files_removed'] + 
-                                      self.stats['files_updated'] + self.stats['files_renamed'])
-                    self.stats['processing_rate'] = total_processed / self.stats['sync_time']
-                
+                self.stats["sync_time"] = time.time() - start_time
+                if self.stats["sync_time"] > 0:
+                    self.stats["scan_rate"] = (
+                        self.stats["files_scanned"] / self.stats["sync_time"]
+                    )
+                    total_processed = (
+                        self.stats["files_added"]
+                        + self.stats["files_removed"]
+                        + self.stats["files_updated"]
+                        + self.stats["files_renamed"]
+                    )
+                    self.stats["processing_rate"] = (
+                        total_processed / self.stats["sync_time"]
+                    )
+
                 # Log results
                 self._log_sync_results()
-                
+
                 return self.stats
-                
+
             except Exception as e:
                 error(f"❌ File index sync failed: {e}")
                 raise
-    
+
     def _can_skip_sync(self) -> bool:
         """Check if we can skip sync based on folder modification times"""
         try:
             # Always run sync on startup to detect deleted files
             # (Folder modification times don't change when files are deleted)
-            debug("🔍 DEBUG: Always running sync on startup to detect deleted files")
+            print("🔍 DEBUG: Always running sync on startup to detect deleted files")
             return False
-            
+
             # If database file doesn't exist, we need to do a full sync
             if not os.path.exists(self.db_path):
-                debug("🔍 DEBUG: Database file doesn't exist, need to do full sync")
+                print("🔍 DEBUG: Database file doesn't exist, need to do full sync")
                 return False
-            
+
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            
+
             # Check if last_sync table exists
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='last_sync'")
+            cursor.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='last_sync'"
+            )
             if not cursor.fetchone():
-                debug("🔍 DEBUG: last_sync table doesn't exist, need to do full sync")
+                print("🔍 DEBUG: last_sync table doesn't exist, need to do full sync")
                 conn.close()
                 return False
-            
+
             # Get last sync time
-            cursor.execute('SELECT last_sync_time FROM last_sync ORDER BY id DESC LIMIT 1')
+            cursor.execute(
+                "SELECT last_sync_time FROM last_sync ORDER BY id DESC LIMIT 1"
+            )
             result = cursor.fetchone()
-            
+
             if not result:
-                debug("🔍 DEBUG: No previous sync found, need to do full sync")
+                print("🔍 DEBUG: No previous sync found, need to do full sync")
                 conn.close()
                 return False  # No previous sync, need to do full sync
-            
+
             last_sync_time = result[0]
             conn.close()
-            
+
             # Check if any indexed folder has been modified since last sync
             for folder in self.indexed_folders:
                 if os.path.exists(folder):
                     folder_mtime = os.path.getmtime(folder)
                     if folder_mtime > last_sync_time:
                         return False  # Folder modified, need to sync
-            
+
             return True  # No changes detected, can skip sync
-            
+
         except Exception as e:
             error(f"❌ Error checking sync skip condition: {e}")
             return False  # On error, do full sync
-    
+
     def _compile_extension_patterns(self) -> Set[str]:
         """Pre-compile extension patterns for ultra-fast filtering"""
         # Convert extensions to lowercase and add dots
         compiled = set()
         for ext in self.supported_extensions:
-            if not ext.startswith('.'):
-                ext = '.' + ext
+            if not ext.startswith("."):
+                ext = "." + ext
             compiled.add(ext.lower())
         return compiled
-    
+
     def _compile_system_patterns(self) -> Dict[str, bool]:
         """Pre-compile system file patterns for fast filtering"""
         patterns = {
             # Hidden files
-            'hidden_start': re.compile(r'^\.'),
+            "hidden_start": re.compile(r"^\."),
             # System files
-            'system_files': {
-                '.DS_Store', 'Thumbs.db', 'desktop.ini', 
-                '.Spotlight-V100', '.Trashes', '.fseventsd',
-                '.TemporaryItems', '.VolumeIcon.icns', '.apdisk',
-                '.localized', '.metadata_never_index', '.parentlock'
+            "system_files": {
+                ".DS_Store",
+                "Thumbs.db",
+                "desktop.ini",
+                ".Spotlight-V100",
+                ".Trashes",
+                ".fseventsd",
+                ".TemporaryItems",
+                ".VolumeIcon.icns",
+                ".apdisk",
+                ".localized",
+                ".metadata_never_index",
+                ".parentlock",
             },
             # Temporary file endings
-            'temp_endings': ('.tmp', '.temp', '.swp', '.lock', '.bak', '.backup'),
+            "temp_endings": (".tmp", ".temp", ".swp", ".lock", ".bak", ".backup"),
             # Database file endings
-            'db_endings': ('.db', '.db-journal', '.db-wal', '.db-shm', '.sqlite', '.sqlite3'),
+            "db_endings": (
+                ".db",
+                ".db-journal",
+                ".db-wal",
+                ".db-shm",
+                ".sqlite",
+                ".sqlite3",
+            ),
             # Log file endings
-            'log_endings': ('.log', '.logs'),
+            "log_endings": (".log", ".logs"),
             # Cache file endings
-            'cache_endings': ('.cache', '.cached'),
+            "cache_endings": (".cache", ".cached"),
             # Partial file endings
-            'partial_endings': ('.part', '.partial')
+            "partial_endings": (".part", ".partial"),
         }
         return patterns
-    
+
     def _get_database_files(self) -> Dict[str, Dict]:
         """Get all files currently in database with their metadata"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
-        cursor.execute("""
+
+        cursor.execute(
+            """
             SELECT path, name, vendor, library, file_type, modified_time, 
                    file_size, file_hash, tags, keywords, instrument, genre, mood
             FROM files
-        """)
-        
+        """
+        )
+
         db_files = {}
         for row in cursor.fetchall():
-            path, name, vendor, library, file_type, modified_time, file_size, file_hash, tags, keywords, instrument, genre, mood = row
+            (
+                path,
+                name,
+                vendor,
+                library,
+                file_type,
+                modified_time,
+                file_size,
+                file_hash,
+                tags,
+                keywords,
+                instrument,
+                genre,
+                mood,
+            ) = row
             db_files[path] = {
-                'name': name,
-                'vendor': vendor,
-                'library': library,
-                'file_type': file_type,
-                'modified_time': modified_time,
-                'file_size': file_size,
-                'file_hash': file_hash,
-                'tags': tags,
-                'keywords': keywords,
-                'instrument': instrument,
-                'genre': genre,
-                'mood': mood
+                "name": name,
+                "vendor": vendor,
+                "library": library,
+                "file_type": file_type,
+                "modified_time": modified_time,
+                "file_size": file_size,
+                "file_hash": file_hash,
+                "tags": tags,
+                "keywords": keywords,
+                "instrument": instrument,
+                "genre": genre,
+                "mood": mood,
             }
-        
+
         conn.close()
         return db_files
-    
+
     def _scan_filesystem(self) -> Dict[str, Dict]:
         """🚀 PROFESSIONAL filesystem scanning with streaming and progress reporting"""
         fs_files = {}
         total_files_scanned = 0
         relevant_files_found = 0
         start_time = time.time()
-        
+
         # Progress tracking
         last_progress_time = start_time
         last_progress_count = 0
-        
+
         for folder in self.indexed_folders:
             if not os.path.exists(folder):
                 warning(f"⚠️ Indexed folder does not exist: {folder}")
                 continue
-            
+
             info(f"🔍 Scanning folder: {folder}")
-            
+
             # Walk through folder recursively
             for root, dirs, files in os.walk(folder):
                 for file in files:
                     file_path = os.path.join(root, file)
                     total_files_scanned += 1
-                    
+
                     # 🚀 ULTRA-FAST filtering - most files filtered out here
                     if not self._should_process_file(file_path):
                         continue
-                    
+
                     relevant_files_found += 1
-                    
+
                     try:
                         # Get file info
                         stat = os.stat(file_path)
                         file_name = os.path.basename(file_path)
-                        
+
                         # 🚀 FAST extension extraction - avoid Path() overhead
-                        last_dot = file_name.rfind('.')
-                        file_type = file_name[last_dot:].lower() if last_dot != -1 else ''
-                        
+                        last_dot = file_name.rfind(".")
+                        file_type = (
+                            file_name[last_dot:].lower() if last_dot != -1 else ""
+                        )
+
                         # Skip hash calculation during initial scan for speed
                         file_hash = ""  # Empty hash for now
-                        
-                        # 🚀 NEW: Use V3 extractor (fast and accurate + project detection)
-                        vendor, library, project = self._extract_vendor_library_from_path(file_path)
-                        
+
+                        # 🚀 SIMPLIFIED vendor extraction for speed
+                        vendor, library = self._fast_extract_vendor_library(file_path)
+
                         fs_files[file_path] = {
-                            'name': file_name,
-                            'vendor': vendor,
-                            'library': library,
-                            'project': project,
-                            'file_type': file_type,
-                            'modified_time': stat.st_mtime,
-                            'file_size': stat.st_size,
-                            'file_hash': file_hash
+                            "name": file_name,
+                            "vendor": vendor,
+                            "library": library,
+                            "file_type": file_type,
+                            "modified_time": stat.st_mtime,
+                            "file_size": stat.st_size,
+                            "file_hash": file_hash,
                         }
-                        
-                        self.stats['files_scanned'] += 1
-                        
+
+                        self.stats["files_scanned"] += 1
+
                         # 🚀 PROFESSIONAL progress reporting with rate and ETA
                         current_time = time.time()
-                        if current_time - last_progress_time >= 2.0:  # Report every 2 seconds
-                            rate = (total_files_scanned - last_progress_count) / (current_time - last_progress_time)
-                            
+                        if (
+                            current_time - last_progress_time >= 2.0
+                        ):  # Report every 2 seconds
+                            rate = (total_files_scanned - last_progress_count) / (
+                                current_time - last_progress_time
+                            )
+
                             # Estimate remaining files (rough approximation)
                             if rate > 0:
                                 # Assume we're scanning about 10% of total files
                                 estimated_total = total_files_scanned * 10
-                                remaining = max(0, estimated_total - total_files_scanned)
+                                remaining = max(
+                                    0, estimated_total - total_files_scanned
+                                )
                                 eta_seconds = remaining / rate if rate > 0 else 0
                                 eta_minutes = eta_seconds / 60
-                                
-                                debug(f"🔍 Scanned {total_files_scanned:,} files, found {relevant_files_found:,} relevant files...")
-                                debug(f"   Rate: {rate:.0f} files/sec, ETA: {eta_minutes:.1f} minutes")
-                            
+
+                                print(
+                                    f"🔍 Scanned {total_files_scanned:,} files, found {relevant_files_found:,} relevant files..."
+                                )
+                                print(
+                                    f"   Rate: {rate:.0f} files/sec, ETA: {eta_minutes:.1f} minutes"
+                                )
+
                             last_progress_time = current_time
                             last_progress_count = total_files_scanned
-                        
+
                     except (OSError, IOError) as e:
                         warning(f"⚠️ Cannot access file {file_path}: {e}")
                         continue
-        
+
         total_time = time.time() - start_time
         rate = total_files_scanned / total_time if total_time > 0 else 0
-        
-        info(f"🔍 Filesystem scan complete: {total_files_scanned:,} total files, {relevant_files_found:,} relevant files")
-        debug(f"   Scan rate: {rate:.0f} files/sec, Total time: {total_time:.1f} seconds")
-        
+
+        print(
+            f"🔍 Filesystem scan complete: {total_files_scanned:,} total files, {relevant_files_found:,} relevant files"
+        )
+        print(
+            f"   Scan rate: {rate:.0f} files/sec, Total time: {total_time:.1f} seconds"
+        )
+
         return fs_files
-    
+
     def _should_process_file(self, file_path: str) -> bool:
         """🚀 ULTRA-FAST file filtering - optimized for 1.2M+ files"""
         try:
             # Get filename and extension in one go
             filename = os.path.basename(file_path)
-            
+
             # Skip hidden files (starting with .) - fastest check first
-            if filename[0] == '.':
+            if filename[0] == ".":
                 return False
-            
+
             # Skip system files - use pre-compiled set
-            if filename in self._system_file_patterns['system_files']:
+            if filename in self._system_file_patterns["system_files"]:
                 return False
-            
+
             # Skip temporary files - use pre-compiled tuple
-            if filename.endswith(self._system_file_patterns['temp_endings']):
+            if filename.endswith(self._system_file_patterns["temp_endings"]):
                 return False
-            
+
             # Skip database files
-            if filename.endswith(self._system_file_patterns['db_endings']):
+            if filename.endswith(self._system_file_patterns["db_endings"]):
                 return False
-            
+
             # Skip log files
-            if filename.endswith(self._system_file_patterns['log_endings']):
+            if filename.endswith(self._system_file_patterns["log_endings"]):
                 return False
-            
+
             # Skip cache files
-            if filename.endswith(self._system_file_patterns['cache_endings']):
+            if filename.endswith(self._system_file_patterns["cache_endings"]):
                 return False
-            
+
             # Skip partial files
-            if filename.endswith(self._system_file_patterns['partial_endings']):
+            if filename.endswith(self._system_file_patterns["partial_endings"]):
                 return False
-            
+
             # 🚀 ULTRA-FAST extension check - find last dot and check against pre-compiled set
-            last_dot = filename.rfind('.')
+            last_dot = filename.rfind(".")
             if last_dot == -1:
                 return False  # No extension
-            
+
             ext = filename[last_dot:].lower()
             return ext in self._compiled_extensions
-            
+
         except:
             return False  # Skip if we can't determine
-    
+
     def _calculate_file_hash(self, file_path: str) -> str:
         """Calculate MD5 hash of file for change detection"""
         try:
@@ -606,96 +556,53 @@ class FileIndexManager:
             return hash_md5.hexdigest()
         except:
             return ""  # Return empty string if hash calculation fails
-    
-    def _get_known_libraries_from_db(self) -> list:
-        """
-        Load known library names from database (cached for performance).
-        🚀 BEST PRACTICE: Cache library names to avoid repeated DB queries.
-        """
-        if self._known_libraries_cache is not None:
-            return self._known_libraries_cache
-        
+
+    def _extract_vendor_library_from_path(self, file_path: str) -> Tuple[str, str]:
+        """Extract vendor and library from file path"""
         try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            # Get distinct library names that are not "Unknown Library"
-            cursor.execute("""
-                SELECT DISTINCT library 
-                FROM files 
-                WHERE library IS NOT NULL 
-                  AND library != 'Unknown Library'
-                  AND library != ''
-            """)
-            
-            self._known_libraries_cache = [row[0] for row in cursor.fetchall()]
-            conn.close()
-            
-            return self._known_libraries_cache
-            
+            from utils.database.knowledge_database import KnowledgeDatabase
+            import appdirs
+            from settings.core_settings import APP_NAME, APP_AUTHOR
+
+            # Get knowledge database path
+            config_dir = appdirs.user_config_dir(APP_NAME, APP_AUTHOR)
+            knowledge_db_path = os.path.join(config_dir, "patchio_knowledge.db")
+
+            if os.path.exists(knowledge_db_path):
+                knowledge_db = KnowledgeDatabase(knowledge_db_path)
+                return knowledge_db.extract_vendor_library(file_path)
+            else:
+                return self._simple_extract_vendor_library(file_path)
+
         except Exception as e:
-            # If DB doesn't exist yet or error, return empty list
-            return []
-    
-    def _extract_vendor_library_from_path(self, file_path: str) -> Tuple[str, Optional[str], Optional[str]]:
-        """
-        Extract vendor, library, and project from file path.
-        🚀 ROBUST: For audio files, passes known libraries from DB to V3.
-        🚀 PROJECT: Detects DAW projects and returns project name.
-        
-        Returns:
-            (vendor, library, project) tuple
-        """
-        try:
-            # 🚀 NEW: Use V3 extractor (fast pattern-based extraction + project detection)
-            from utils.database.library_extractor_v3 import LibraryExtractorV3
-            
-            # Create or reuse V3 extractor (uses shared vendor cache from knowledge DB)
-            if not hasattr(self, '_v3_extractor'):
-                self._v3_extractor = LibraryExtractorV3(use_knowledge_db=True)
-            
-            # Get known libraries from DB (cached)
-            known_libraries = self._get_known_libraries_from_db()
-            
-            # Get project map (if available from pre-scan)
-            project_map = getattr(self, '_project_map', None)
-            
-            # Pass known libraries and project map to V3 for robust extraction
-            return self._v3_extractor.extract_vendor_library(
-                file_path, 
-                known_libraries=known_libraries,
-                project_map=project_map
-            )
-                
-        except Exception as e:
-            return 'Unknown Vendor', 'Unknown Library', None
-    
+            return self._simple_extract_vendor_library(file_path)
+
     def _fast_extract_vendor_library(self, file_path: str) -> Tuple[str, str]:
         """🚀 ULTRA-FAST vendor/library extraction - optimized for speed"""
         # Use string operations instead of Path() for speed
         path_lower = file_path.lower()
-        
+
         # Pre-compiled vendor patterns for speed
         vendor_patterns = {
-            'native instruments': 'Native Instruments',
-            'spitfire': 'Spitfire Audio',
-            'heavyocity': 'Heavyocity',
-            'eastwest': 'EastWest',
-            'cinesamples': 'Cinesamples',
-            'synthogy': 'Synthogy',
-            'apple': 'Apple',
-            'steinberg': 'Steinberg',
-            'image-line': 'Image-Line',
-            'avid': 'Avid',
-            'cockos': 'Cockos',
-            'bitwig': 'Bitwig',
-            'reason studios': 'Reason Studios'
+            "native instruments": "Native Instruments",
+            "spitfire": "Spitfire Audio",
+            "heavyocity": "Heavyocity",
+            "eastwest": "EastWest",
+            "cinesamples": "Cinesamples",
+            "synthogy": "Synthogy",
+            "apple": "Apple",
+            "steinberg": "Steinberg",
+            "image-line": "Image-Line",
+            "avid": "Avid",
+            "cockos": "Cockos",
+            "bitwig": "Bitwig",
+            "reason studios": "Reason Studios",
         }
-        
+
         # Find vendor in path
-        vendor = 'Unknown Vendor'
-        library = 'Unknown Library'
-        
+        vendor = "Unknown Vendor"
+        library = "Unknown Library"
+
         for pattern, vendor_name in vendor_patterns.items():
             if pattern in path_lower:
                 vendor = vendor_name
@@ -706,19 +613,23 @@ class FileIndexManager:
                         # Look for library in next few folders
                         for j in range(i + 1, min(i + 4, len(parts))):
                             next_part = parts[j]
-                            if (len(next_part) > 2 and len(next_part) <= 30 and 
-                                next_part.lower() not in {'samples', 'patches', 'instruments', 'presets'}):
+                            if (
+                                len(next_part) > 2
+                                and len(next_part) <= 30
+                                and next_part.lower()
+                                not in {"samples", "patches", "instruments", "presets"}
+                            ):
                                 library = next_part
                                 break
                         break
                 break
-        
+
         return vendor, library
-    
+
     def _streaming_sync(self):
         """🚀 STREAMING SYNC - Memory-efficient processing for unlimited file counts"""
         info("🌊 Starting streaming sync for large file collection...")
-        
+
         # Phase 1: Clear existing database for fresh start
         info("🗑️ Clearing existing database for fresh sync...")
         conn = sqlite3.connect(self.db_path)
@@ -727,345 +638,398 @@ class FileIndexManager:
         cursor.execute("DELETE FROM file_hashes")
         conn.commit()
         conn.close()
-        
+
         # Phase 2: Stream filesystem scan with batch processing
         info("📁 Streaming filesystem scan with batch processing...")
-        
+
         batch_buffer = []
         total_files_scanned = 0
         relevant_files_found = 0
         start_time = time.time()
         last_progress_time = start_time
-        
+
         for folder in self.indexed_folders:
             if not os.path.exists(folder):
                 warning(f"⚠️ Indexed folder does not exist: {folder}")
                 continue
-            
+
             info(f"🔍 Streaming folder: {folder}")
-            
+
             # Walk through folder recursively
             for root, dirs, files in os.walk(folder):
                 for file in files:
                     file_path = os.path.join(root, file)
                     total_files_scanned += 1
-                    
+
                     # 🚀 ULTRA-FAST filtering
                     if not self._should_process_file(file_path):
                         continue
-                    
+
                     relevant_files_found += 1
-                    
+
                     try:
                         # Get file info
                         stat = os.stat(file_path)
                         file_name = os.path.basename(file_path)
-                        
+
                         # 🚀 FAST extension extraction
-                        last_dot = file_name.rfind('.')
-                        file_type = file_name[last_dot:].lower() if last_dot != -1 else ''
-                        
-                        # 🚀 NEW: Use V3 extractor (fast and accurate + project detection)
-                        vendor, library, project = self._extract_vendor_library_from_path(file_path)
-                        
+                        last_dot = file_name.rfind(".")
+                        file_type = (
+                            file_name[last_dot:].lower() if last_dot != -1 else ""
+                        )
+
+                        # 🚀 FAST vendor extraction
+                        vendor, library = self._fast_extract_vendor_library(file_path)
+
                         # Add to batch buffer
-                        batch_buffer.append((
-                            file_path, file_name, vendor, library, project, file_type,
-                            stat.st_mtime, stat.st_size, ""  # Empty hash for now
-                        ))
-                        
-                        self.stats['files_scanned'] += 1
-                        
+                        batch_buffer.append(
+                            (
+                                file_path,
+                                file_name,
+                                vendor,
+                                library,
+                                file_type,
+                                stat.st_mtime,
+                                stat.st_size,
+                                "",  # Empty hash for now
+                            )
+                        )
+
+                        self.stats["files_scanned"] += 1
+
                         # 🚀 BATCH PROCESSING - Process in chunks to avoid memory issues
                         if len(batch_buffer) >= self.batch_size:
                             self._process_batch(batch_buffer)
                             batch_buffer = []
-                        
+
                         # 🚀 PROFESSIONAL progress reporting
                         current_time = time.time()
-                        if current_time - last_progress_time >= 3.0:  # Report every 3 seconds
-                            rate = (total_files_scanned - (total_files_scanned - relevant_files_found)) / (current_time - last_progress_time)
-                            
+                        if (
+                            current_time - last_progress_time >= 3.0
+                        ):  # Report every 3 seconds
+                            rate = (
+                                total_files_scanned
+                                - (total_files_scanned - relevant_files_found)
+                            ) / (current_time - last_progress_time)
+
                             # Estimate remaining files
                             if rate > 0:
                                 # Rough estimation based on current progress
-                                estimated_total = total_files_scanned * 1.2  # Assume 20% more files
-                                remaining = max(0, estimated_total - total_files_scanned)
+                                estimated_total = (
+                                    total_files_scanned * 1.2
+                                )  # Assume 20% more files
+                                remaining = max(
+                                    0, estimated_total - total_files_scanned
+                                )
                                 eta_seconds = remaining / rate if rate > 0 else 0
                                 eta_minutes = eta_seconds / 60
-                                
-                                debug(f"🌊 Streaming: {total_files_scanned:,} scanned, {relevant_files_found:,} relevant, {self.stats['files_added']:,} added")
-                                debug(f"   Rate: {rate:.0f} files/sec, ETA: {eta_minutes:.1f} minutes")
-                                
+
+                                print(
+                                    f"🌊 Streaming: {total_files_scanned:,} scanned, {relevant_files_found:,} relevant, {self.stats['files_added']:,} added"
+                                )
+                                print(
+                                    f"   Rate: {rate:.0f} files/sec, ETA: {eta_minutes:.1f} minutes"
+                                )
+
                                 # Call progress callback if provided
                                 if self.progress_callback:
-                                    self.progress_callback({
-                                        'phase': 'streaming_scan',
-                                        'scanned': total_files_scanned,
-                                        'relevant': relevant_files_found,
-                                        'added': self.stats['files_added'],
-                                        'rate': rate,
-                                        'eta_minutes': eta_minutes
-                                    })
-                            
+                                    self.progress_callback(
+                                        {
+                                            "phase": "streaming_scan",
+                                            "scanned": total_files_scanned,
+                                            "relevant": relevant_files_found,
+                                            "added": self.stats["files_added"],
+                                            "rate": rate,
+                                            "eta_minutes": eta_minutes,
+                                        }
+                                    )
+
                             last_progress_time = current_time
-                        
+
                     except (OSError, IOError) as e:
                         warning(f"⚠️ Cannot access file {file_path}: {e}")
                         continue
-        
+
         # Process remaining batch
         if batch_buffer:
             self._process_batch(batch_buffer)
-        
+
         total_time = time.time() - start_time
         rate = total_files_scanned / total_time if total_time > 0 else 0
-        
-        info(f"🌊 Streaming sync complete: {total_files_scanned:,} scanned, {relevant_files_found:,} relevant, {self.stats['files_added']:,} added")
-        info(f"   Final rate: {rate:.0f} files/sec, Total time: {total_time:.1f} seconds")
-    
+
+        info(
+            f"🌊 Streaming sync complete: {total_files_scanned:,} scanned, {relevant_files_found:,} relevant, {self.stats['files_added']:,} added"
+        )
+        info(
+            f"   Final rate: {rate:.0f} files/sec, Total time: {total_time:.1f} seconds"
+        )
+
     def _process_batch(self, batch_data: List[Tuple]):
         """🚀 Process a batch of files efficiently"""
         if not batch_data:
             return
-        
+
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
+
         try:
             # 🚀 BATCH INSERT with INSERT OR IGNORE to handle duplicates
             insert_sql = """
-                INSERT OR IGNORE INTO files (path, name, vendor, library, project, file_type, 
+                INSERT OR IGNORE INTO files (path, name, vendor, library, file_type, 
                                            modified_time, file_size, file_hash, 
                                            created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'), strftime('%s', 'now'))
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'), strftime('%s', 'now'))
             """
-            
+
             cursor.executemany(insert_sql, batch_data)
-            self.stats['files_added'] += len(batch_data)
-            
+            self.stats["files_added"] += len(batch_data)
+
             conn.commit()
-            
+
         except Exception as e:
             conn.rollback()
             error(f"❌ Batch processing failed: {e}")
             raise
         finally:
             conn.close()
-    
-    def _simple_extract_vendor_library(self, file_path: str) -> Tuple[str, Optional[str], Optional[str]]:
-        """
-        Simple fallback vendor/library extraction.
-        🚀 NEW: Now uses V3 extractor with project detection.
-        
-        Returns:
-            (vendor, library, project) tuple
-        """
-        return self._extract_vendor_library_from_path(file_path)
-    
+
+    def _simple_extract_vendor_library(self, file_path: str) -> Tuple[str, str]:
+        """Simple fallback vendor/library extraction"""
+        return self._fast_extract_vendor_library(file_path)
+
     def _find_changes(self, db_files: Dict, fs_files: Dict) -> Dict:
         """Find differences between database and filesystem"""
-        changes = {
-            'to_add': [],
-            'to_remove': [],
-            'to_update': [],
-            'to_rename': []
-        }
-        
+        changes = {"to_add": [], "to_remove": [], "to_update": [], "to_rename": []}
+
         # Find files to add (in FS but not in DB)
         for path, file_info in fs_files.items():
             if path not in db_files:
-                changes['to_add'].append((path, file_info))
-        
+                changes["to_add"].append((path, file_info))
+
         # Find files to remove (in DB but not in FS)
         for path, file_info in db_files.items():
             if path not in fs_files:
-                changes['to_remove'].append((path, file_info))
-        
+                changes["to_remove"].append((path, file_info))
+
         # Find files to update or rename
         for path, fs_info in fs_files.items():
             if path in db_files:
                 db_info = db_files[path]
-                
+
                 # Check if file was modified (skip hash check for speed during initial scan)
-                if (abs(fs_info['modified_time'] - db_info['modified_time']) > 1.0 or
-                    fs_info['file_size'] != db_info['file_size']):
-                    changes['to_update'].append((path, fs_info))
-        
+                if (
+                    abs(fs_info["modified_time"] - db_info["modified_time"]) > 1.0
+                    or fs_info["file_size"] != db_info["file_size"]
+                ):
+                    changes["to_update"].append((path, fs_info))
+
         # Skip rename detection during initial scan for speed (relies on file hashes)
         # self._find_potential_renames(db_files, fs_files, changes)
-        
+
         return changes
-    
+
     def _find_potential_renames(self, db_files: Dict, fs_files: Dict, changes: Dict):
         """Find potential file renames by comparing hashes"""
         # Create hash maps
         db_hash_map = {}
         fs_hash_map = {}
-        
+
         for path, file_info in db_files.items():
-            if file_info['file_hash']:
-                if file_info['file_hash'] not in db_hash_map:
-                    db_hash_map[file_info['file_hash']] = []
-                db_hash_map[file_info['file_hash']].append(path)
-        
+            if file_info["file_hash"]:
+                if file_info["file_hash"] not in db_hash_map:
+                    db_hash_map[file_info["file_hash"]] = []
+                db_hash_map[file_info["file_hash"]].append(path)
+
         for path, file_info in fs_files.items():
-            if file_info['file_hash']:
-                if file_info['file_hash'] not in fs_hash_map:
-                    fs_hash_map[file_info['file_hash']] = []
-                fs_hash_map[file_info['file_hash']].append(path)
-        
+            if file_info["file_hash"]:
+                if file_info["file_hash"] not in fs_hash_map:
+                    fs_hash_map[file_info["file_hash"]] = []
+                fs_hash_map[file_info["file_hash"]].append(path)
+
         # Find renames (same hash, different path)
         for file_hash, db_paths in db_hash_map.items():
             if file_hash in fs_hash_map:
                 fs_paths = fs_hash_map[file_hash]
-                
+
                 # If we have one DB path and one FS path with same hash, it's likely a rename
                 if len(db_paths) == 1 and len(fs_paths) == 1:
                     db_path = db_paths[0]
                     fs_path = fs_paths[0]
-                    
+
                     if db_path != fs_path:
                         # Remove from to_remove and to_add lists
-                        changes['to_remove'] = [(p, i) for p, i in changes['to_remove'] if p != db_path]
-                        changes['to_add'] = [(p, i) for p, i in changes['to_add'] if p != fs_path]
-                        
+                        changes["to_remove"] = [
+                            (p, i) for p, i in changes["to_remove"] if p != db_path
+                        ]
+                        changes["to_add"] = [
+                            (p, i) for p, i in changes["to_add"] if p != fs_path
+                        ]
+
                         # Add to rename list
-                        changes['to_rename'].append((db_path, fs_path, fs_files[fs_path]))
-    
+                        changes["to_rename"].append(
+                            (db_path, fs_path, fs_files[fs_path])
+                        )
+
     def _apply_changes(self, changes: Dict):
         """🚀 PROFESSIONAL batch database operations to handle 1.2M+ files efficiently"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
+
         try:
             # 🚀 BATCH INSERT - Add new files in batches to avoid UNIQUE constraint errors
-            if changes['to_add']:
-                info(f"📝 Adding {len(changes['to_add'])} files in batches of {self.batch_size}...")
-                
+            if changes["to_add"]:
+                info(
+                    f"📝 Adding {len(changes['to_add'])} files in batches of {self.batch_size}..."
+                )
+
                 # Prepare batch insert statement
                 insert_sql = """
                     INSERT OR IGNORE INTO files (path, name, vendor, library, file_type, modified_time, 
                                                file_size, file_hash, created_at, updated_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'), strftime('%s', 'now'))
                 """
-                
+
                 # Process in batches
-                for i in range(0, len(changes['to_add']), self.batch_size):
-                    batch = changes['to_add'][i:i + self.batch_size]
+                for i in range(0, len(changes["to_add"]), self.batch_size):
+                    batch = changes["to_add"][i : i + self.batch_size]
                     batch_data = []
-                    
+
                     for path, file_info in batch:
-                        batch_data.append((
-                            path, file_info['name'], file_info['vendor'], file_info['library'], 
-                            file_info['file_type'], file_info['modified_time'], file_info['file_size'], file_info['file_hash']
-                        ))
-                    
+                        batch_data.append(
+                            (
+                                path,
+                                file_info["name"],
+                                file_info["vendor"],
+                                file_info["library"],
+                                file_info["file_type"],
+                                file_info["modified_time"],
+                                file_info["file_size"],
+                                file_info["file_hash"],
+                            )
+                        )
+
                     cursor.executemany(insert_sql, batch_data)
-                    self.stats['files_added'] += len(batch_data)
-                    
+                    self.stats["files_added"] += len(batch_data)
+
                     # Progress reporting
                     if (i + self.batch_size) % (self.batch_size * 10) == 0:
-                        debug(f"   Added {i + len(batch_data)}/{len(changes['to_add'])} files...")
-                
+                        print(
+                            f"   Added {i + len(batch_data)}/{len(changes['to_add'])} files..."
+                        )
+
                 info(f"✅ Added {self.stats['files_added']} files successfully")
-            
+
             # 🚀 BATCH DELETE - Remove deleted files in batches
-            if changes['to_remove']:
+            if changes["to_remove"]:
                 info(f"🗑️ Removing {len(changes['to_remove'])} files in batches...")
-                
+
                 delete_sql = "DELETE FROM files WHERE path = ?"
-                
-                for i in range(0, len(changes['to_remove']), self.batch_size):
-                    batch = changes['to_remove'][i:i + self.batch_size]
+
+                for i in range(0, len(changes["to_remove"]), self.batch_size):
+                    batch = changes["to_remove"][i : i + self.batch_size]
                     batch_paths = [(path,) for path, file_info in batch]
-                    
+
                     cursor.executemany(delete_sql, batch_paths)
-                    self.stats['files_removed'] += len(batch_paths)
-                
+                    self.stats["files_removed"] += len(batch_paths)
+
                 info(f"✅ Removed {self.stats['files_removed']} files successfully")
-            
+
             # 🚀 BATCH UPDATE - Update modified files in batches
-            if changes['to_update']:
+            if changes["to_update"]:
                 info(f"📝 Updating {len(changes['to_update'])} files in batches...")
-                
+
                 update_sql = """
                     UPDATE files 
                     SET modified_time = ?, file_size = ?, file_hash = ?, 
                         vendor = ?, library = ?, updated_at = strftime('%s', 'now')
                     WHERE path = ?
                 """
-                
-                for i in range(0, len(changes['to_update']), self.batch_size):
-                    batch = changes['to_update'][i:i + self.batch_size]
+
+                for i in range(0, len(changes["to_update"]), self.batch_size):
+                    batch = changes["to_update"][i : i + self.batch_size]
                     batch_data = []
-                    
+
                     for path, file_info in batch:
-                        batch_data.append((
-                            file_info['modified_time'], file_info['file_size'], file_info['file_hash'], 
-                            file_info['vendor'], file_info['library'], path
-                        ))
-                    
+                        batch_data.append(
+                            (
+                                file_info["modified_time"],
+                                file_info["file_size"],
+                                file_info["file_hash"],
+                                file_info["vendor"],
+                                file_info["library"],
+                                path,
+                            )
+                        )
+
                     cursor.executemany(update_sql, batch_data)
-                    self.stats['files_updated'] += len(batch_data)
-                
+                    self.stats["files_updated"] += len(batch_data)
+
                 info(f"✅ Updated {self.stats['files_updated']} files successfully")
-            
+
             # 🚀 BATCH RENAME - Handle renames in batches
-            if changes['to_rename']:
+            if changes["to_rename"]:
                 info(f"🔄 Renaming {len(changes['to_rename'])} files in batches...")
-                
+
                 rename_sql = """
                     UPDATE files 
                     SET path = ?, name = ?, modified_time = ?, file_size = ?, 
                         file_hash = ?, updated_at = strftime('%s', 'now')
                     WHERE path = ?
                 """
-                
-                for i in range(0, len(changes['to_rename']), self.batch_size):
-                    batch = changes['to_rename'][i:i + self.batch_size]
+
+                for i in range(0, len(changes["to_rename"]), self.batch_size):
+                    batch = changes["to_rename"][i : i + self.batch_size]
                     batch_data = []
-                    
+
                     for old_path, new_path, file_info in batch:
-                        batch_data.append((
-                            new_path, file_info['name'], file_info['modified_time'], file_info['file_size'], 
-                            file_info['file_hash'], old_path
-                        ))
-                    
+                        batch_data.append(
+                            (
+                                new_path,
+                                file_info["name"],
+                                file_info["modified_time"],
+                                file_info["file_size"],
+                                file_info["file_hash"],
+                                old_path,
+                            )
+                        )
+
                     cursor.executemany(rename_sql, batch_data)
-                    self.stats['files_renamed'] += len(batch_data)
-                
+                    self.stats["files_renamed"] += len(batch_data)
+
                 info(f"✅ Renamed {self.stats['files_renamed']} files successfully")
-            
+
             conn.commit()
-            
+
         except Exception as e:
             conn.rollback()
             error(f"❌ Batch database operations failed: {e}")
             raise
         finally:
             conn.close()
-    
+
     def _update_last_sync_time(self, sync_type: str):
         """Update the last sync timestamp"""
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            
+
             current_time = time.time()
             indexed_folders_json = str(list(self.indexed_folders))
-            
-            cursor.execute('''
+
+            cursor.execute(
+                """
                 INSERT INTO last_sync (last_sync_time, indexed_folders, sync_type)
                 VALUES (?, ?, ?)
-            ''', (current_time, indexed_folders_json, sync_type))
-            
+            """,
+                (current_time, indexed_folders_json, sync_type),
+            )
+
             conn.commit()
             conn.close()
-            
+
         except Exception as e:
             error(f"❌ Error updating last sync time: {e}")
-    
+
     def _log_sync_results(self):
         """🚀 PROFESSIONAL sync results logging with performance metrics"""
         info("📊 PROFESSIONAL FILE INDEX SYNC RESULTS")
@@ -1077,27 +1041,45 @@ class FileIndexManager:
         info(f"Files updated: {self.stats['files_updated']:,}")
         info(f"Files renamed: {self.stats['files_renamed']:,}")
         info(f"Sync time: {self.stats['sync_time']:.2f} seconds")
-        
+
         # 🚀 Performance metrics
-        if self.stats['scan_rate'] > 0:
+        if self.stats["scan_rate"] > 0:
             info(f"Scan rate: {self.stats['scan_rate']:.0f} files/second")
-        if self.stats['processing_rate'] > 0:
-            info(f"Processing rate: {self.stats['processing_rate']:.0f} operations/second")
-        
+        if self.stats["processing_rate"] > 0:
+            info(
+                f"Processing rate: {self.stats['processing_rate']:.0f} operations/second"
+            )
+
         # Efficiency metrics
-        if self.stats['files_scanned'] > 0:
-            efficiency = (self.stats['files_added'] + self.stats['files_removed'] + 
-                         self.stats['files_updated'] + self.stats['files_renamed']) / self.stats['files_scanned'] * 100
-            info(f"Processing efficiency: {efficiency:.1f}% of scanned files required changes")
-        
-        if (self.stats['files_added'] > 0 or self.stats['files_removed'] > 0 or 
-            self.stats['files_updated'] > 0 or self.stats['files_renamed'] > 0):
+        if self.stats["files_scanned"] > 0:
+            efficiency = (
+                (
+                    self.stats["files_added"]
+                    + self.stats["files_removed"]
+                    + self.stats["files_updated"]
+                    + self.stats["files_renamed"]
+                )
+                / self.stats["files_scanned"]
+                * 100
+            )
+            info(
+                f"Processing efficiency: {efficiency:.1f}% of scanned files required changes"
+            )
+
+        if (
+            self.stats["files_added"] > 0
+            or self.stats["files_removed"] > 0
+            or self.stats["files_updated"] > 0
+            or self.stats["files_renamed"] > 0
+        ):
             info("✅ File index synchronized with filesystem changes")
         else:
             info("✅ File index already up to date")
-        
-        info("🚀 Professional optimizations: Ultra-fast filtering, batch operations, streaming processing")
-    
+
+        info(
+            "🚀 Professional optimizations: Ultra-fast filtering, batch operations, streaming processing"
+        )
+
     def start_real_time_monitoring(self, callback: Optional[Callable] = None) -> None:
         """Start real-time file system monitoring (idempotent & thread-safe)."""
         with getattr(self, "_monitor_lock", threading.Lock()):
@@ -1108,7 +1090,7 @@ class FileIndexManager:
 
             # Normalize & filter folders once
             folders = set()
-            for p in (self.indexed_folders or []):
+            for p in self.indexed_folders or []:
                 try:
                     # absolute path; Windows-safe normalization
                     ap = os.path.abspath(p)
@@ -1166,7 +1148,6 @@ class FileIndexManager:
                 error(f"❌ Failed to start real-time monitoring: {e}")
                 raise
 
-
     def stop_real_time_monitoring(self) -> None:
         """Stop real-time monitoring safely (idempotent)."""
         with getattr(self, "_monitor_lock", threading.Lock()):
@@ -1186,290 +1167,348 @@ class FileIndexManager:
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            
-            if event.event_type == 'created':
+
+            if event.event_type == "created":
                 self._handle_file_created(cursor, event.path)
-            elif event.event_type == 'deleted':
+            elif event.event_type == "deleted":
                 self._handle_file_deleted(cursor, event.path)
-            elif event.event_type == 'moved':
+            elif event.event_type == "moved":
                 self._handle_file_moved(cursor, event.path, event.dest_path)
-            elif event.event_type == 'modified':
+            elif event.event_type == "modified":
                 self._handle_file_modified(cursor, event.path)
-            
+
             conn.commit()
             conn.close()
-            
+
         except Exception as e:
             error(f"❌ Error handling real-time event: {e}")
-    
+
     def _handle_file_created(self, cursor, file_path: str):
         """Handle file creation event with optimized processing"""
         if not self._should_process_file(file_path):
             return
-        
+
         try:
             stat = os.stat(file_path)
             file_name = os.path.basename(file_path)
-            
+
             # 🚀 FAST extension extraction
-            last_dot = file_name.rfind('.')
-            file_type = file_name[last_dot:].lower() if last_dot != -1 else ''
-            
+            last_dot = file_name.rfind(".")
+            file_type = file_name[last_dot:].lower() if last_dot != -1 else ""
+
             file_hash = self._calculate_file_hash(file_path)
-            # 🚀 NEW: Use V3 extractor (fast and accurate + project detection)
-            vendor, library, project = self._extract_vendor_library_from_path(file_path)
-            
-            cursor.execute("""
-                INSERT OR IGNORE INTO files (path, name, vendor, library, project, file_type, 
+            vendor, library = self._fast_extract_vendor_library(file_path)
+
+            cursor.execute(
+                """
+                INSERT OR IGNORE INTO files (path, name, vendor, library, file_type, 
                                            modified_time, file_size, file_hash, 
                                            created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'), strftime('%s', 'now'))
-            """, (file_path, file_name, vendor, library, project, file_type, 
-                 stat.st_mtime, stat.st_size, file_hash))
-            
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'), strftime('%s', 'now'))
+            """,
+                (
+                    file_path,
+                    file_name,
+                    vendor,
+                    library,
+                    file_type,
+                    stat.st_mtime,
+                    stat.st_size,
+                    file_hash,
+                ),
+            )
+
             info(f"➕ Added file: {file_name}")
-            
+
         except Exception as e:
             error(f"❌ Error adding file {file_path}: {e}")
-    
+
     def _handle_file_deleted(self, cursor, file_path: str):
         """Handle file deletion event"""
         cursor.execute("DELETE FROM files WHERE path = ?", (file_path,))
         if cursor.rowcount > 0:
             info(f"➖ Removed file: {os.path.basename(file_path)}")
-    
+
     def _handle_file_moved(self, cursor, old_path: str, new_path: str):
         """Handle file move/rename event with optimized processing"""
         # Check if moved to Trash (macOS deletion)
-        if '.Trashes' in new_path or 'Trash' in new_path:
+        if ".Trashes" in new_path or "Trash" in new_path:
             cursor.execute("DELETE FROM files WHERE path = ?", (old_path,))
             if cursor.rowcount > 0:
                 info(f"➖ Removed file (moved to Trash): {os.path.basename(old_path)}")
             return
-        
+
         # Check if moved from Trash (macOS restore)
-        if '.Trashes' in old_path or 'Trash' in old_path:
+        if ".Trashes" in old_path or "Trash" in old_path:
             if self._should_process_file(new_path):
                 self._handle_file_created(cursor, new_path)
                 info(f"♻️ Restored file from Trash: {os.path.basename(new_path)}")
             return
-        
+
         # Regular move/rename - update path, preserve metadata
         if self._should_process_file(new_path):
             try:
                 stat = os.stat(new_path)
                 file_name = os.path.basename(new_path)
-                
+
                 # 🚀 FAST extension extraction
-                last_dot = file_name.rfind('.')
-                file_type = file_name[last_dot:].lower() if last_dot != -1 else ''
-                
+                last_dot = file_name.rfind(".")
+                file_type = file_name[last_dot:].lower() if last_dot != -1 else ""
+
                 file_hash = self._calculate_file_hash(new_path)
-                # 🚀 NEW: Use V3 extractor (fast and accurate + project detection)
-                vendor, library, project = self._extract_vendor_library_from_path(new_path)
-                
-                cursor.execute("""
+                vendor, library = self._fast_extract_vendor_library(new_path)
+
+                cursor.execute(
+                    """
                     UPDATE files 
                     SET path = ?, name = ?, modified_time = ?, file_size = ?, 
-                        file_hash = ?, vendor = ?, library = ?, project = ?, updated_at = strftime('%s', 'now')
+                        file_hash = ?, vendor = ?, library = ?, updated_at = strftime('%s', 'now')
                     WHERE path = ?
-                """, (new_path, file_name, stat.st_mtime, stat.st_size, 
-                     file_hash, vendor, library, project, old_path))
-                
+                """,
+                    (
+                        new_path,
+                        file_name,
+                        stat.st_mtime,
+                        stat.st_size,
+                        file_hash,
+                        vendor,
+                        library,
+                        old_path,
+                    ),
+                )
+
                 if cursor.rowcount > 0:
-                    info(f"🔄 Moved file index_manager: {os.path.basename(old_path)} -> {file_name}")
+                    info(
+                        f"🔄 Moved file index_manager: {os.path.basename(old_path)} -> {file_name}"
+                    )
                 else:
                     # File not in database, add it
                     self._handle_file_created(cursor, new_path)
-                    
+
             except Exception as e:
                 error(f"❌ Error moving file {old_path}: {e}")
         else:
             # File moved outside indexed area, remove it
             cursor.execute("DELETE FROM files WHERE path = ?", (old_path,))
             if cursor.rowcount > 0:
-                info(f"➖ Moved file outside indexed area: {os.path.basename(old_path)}")
-    
+                info(
+                    f"➖ Moved file outside indexed area: {os.path.basename(old_path)}"
+                )
+
     def _handle_file_modified(self, cursor, file_path: str):
         """Handle file modification event with optimized processing"""
         if not self._should_process_file(file_path):
             return
-        
+
         try:
             stat = os.stat(file_path)
             file_hash = self._calculate_file_hash(file_path)
-            # 🚀 NEW: Use V3 extractor (fast and accurate + project detection)
-            vendor, library, project = self._extract_vendor_library_from_path(file_path)
-            
-            cursor.execute("""
+            vendor, library = self._fast_extract_vendor_library(file_path)
+
+            cursor.execute(
+                """
                 UPDATE files 
                 SET modified_time = ?, file_size = ?, file_hash = ?, 
-                    vendor = ?, library = ?, project = ?, updated_at = strftime('%s', 'now')
+                    vendor = ?, library = ?, updated_at = strftime('%s', 'now')
                 WHERE path = ?
-            """, (stat.st_mtime, stat.st_size, file_hash, vendor, library, project, file_path))
-            
+            """,
+                (stat.st_mtime, stat.st_size, file_hash, vendor, library, file_path),
+            )
+
             if cursor.rowcount > 0:
                 info(f"📝 Updated file: {os.path.basename(file_path)}")
-            
+
         except Exception as e:
             error(f"❌ Error updating file {file_path}: {e}")
-    
+
     def get_file_metadata(self, file_path: str) -> Optional[Dict]:
         """Get metadata for a specific file"""
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            
-            cursor.execute("""
+
+            cursor.execute(
+                """
                 SELECT path, name, vendor, library, file_type, modified_time, 
                        file_size, file_hash, tags, keywords, instrument, genre, mood
                 FROM files WHERE path = ?
-            """, (file_path,))
-            
+            """,
+                (file_path,),
+            )
+
             row = cursor.fetchone()
             conn.close()
-            
+
             if row:
                 return {
-                    'path': row[0],
-                    'name': row[1],
-                    'vendor': row[2],
-                    'library': row[3],
-                    'file_type': row[4],
-                    'modified_time': row[5],
-                    'file_size': row[6],
-                    'file_hash': row[7],
-                    'tags': row[8],
-                    'keywords': row[9],
-                    'instrument': row[10],
-                    'genre': row[11],
-                    'mood': row[12]
+                    "path": row[0],
+                    "name": row[1],
+                    "vendor": row[2],
+                    "library": row[3],
+                    "file_type": row[4],
+                    "modified_time": row[5],
+                    "file_size": row[6],
+                    "file_hash": row[7],
+                    "tags": row[8],
+                    "keywords": row[9],
+                    "instrument": row[10],
+                    "genre": row[11],
+                    "mood": row[12],
                 }
-            
+
             return None
-            
+
         except Exception as e:
             error(f"❌ Error getting file metadata: {e}")
             return None
-    
+
     def update_file_metadata(self, file_path: str, metadata: Dict):
         """Update metadata for a specific file"""
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            
-            cursor.execute("""
+
+            cursor.execute(
+                """
                 UPDATE files 
                 SET tags = ?, keywords = ?, instrument = ?, genre = ?, mood = ?,
                     updated_at = strftime('%s', 'now')
                 WHERE path = ?
-            """, (metadata.get('tags'), metadata.get('keywords'), 
-                 metadata.get('instrument'), metadata.get('genre'), 
-                 metadata.get('mood'), file_path))
-            
+            """,
+                (
+                    metadata.get("tags"),
+                    metadata.get("keywords"),
+                    metadata.get("instrument"),
+                    metadata.get("genre"),
+                    metadata.get("mood"),
+                    file_path,
+                ),
+            )
+
             conn.commit()
             conn.close()
-            
+
             if cursor.rowcount > 0:
                 info(f"📝 Updated metadata for: {os.path.basename(file_path)}")
-            
+
         except Exception as e:
             error(f"❌ Error updating file metadata: {e}")
-    
+
     def search_files(self, query: str, limit: int = 100) -> List[Dict]:
         """Search for files in the index"""
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            
+
             # Simple search across name, vendor, library, tags, keywords
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT path, name, vendor, library, file_type, tags, keywords, instrument, genre, mood
                 FROM files 
                 WHERE name LIKE ? OR vendor LIKE ? OR library LIKE ? OR tags LIKE ? OR keywords LIKE ?
                 ORDER BY name
                 LIMIT ?
-            """, (f'%{query}%', f'%{query}%', f'%{query}%', f'%{query}%', f'%{query}%', limit))
-            
+            """,
+                (
+                    f"%{query}%",
+                    f"%{query}%",
+                    f"%{query}%",
+                    f"%{query}%",
+                    f"%{query}%",
+                    limit,
+                ),
+            )
+
             results = []
             for row in cursor.fetchall():
-                results.append({
-                    'path': row[0],
-                    'name': row[1],
-                    'vendor': row[2],
-                    'library': row[3],
-                    'file_type': row[4],
-                    'tags': row[5],
-                    'keywords': row[6],
-                    'instrument': row[7],
-                    'genre': row[8],
-                    'mood': row[9]
-                })
-            
+                results.append(
+                    {
+                        "path": row[0],
+                        "name": row[1],
+                        "vendor": row[2],
+                        "library": row[3],
+                        "file_type": row[4],
+                        "tags": row[5],
+                        "keywords": row[6],
+                        "instrument": row[7],
+                        "genre": row[8],
+                        "mood": row[9],
+                    }
+                )
+
             conn.close()
             return results
-            
+
         except Exception as e:
             error(f"❌ Error searching files: {e}")
             return []
-    
+
     def get_statistics(self) -> Dict:
         """Get database statistics"""
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            
+
             # Get total file count
             cursor.execute("SELECT COUNT(*) FROM files")
             total_files = cursor.fetchone()[0]
-            
+
             # Get vendor distribution
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT vendor, COUNT(*) as count 
                 FROM files 
                 WHERE vendor IS NOT NULL AND vendor != 'Unknown Vendor'
                 GROUP BY vendor 
                 ORDER BY count DESC 
                 LIMIT 10
-            """)
+            """
+            )
             vendor_stats = dict(cursor.fetchall())
-            
+
             # Get file type distribution
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT file_type, COUNT(*) as count 
                 FROM files 
                 WHERE file_type IS NOT NULL
                 GROUP BY file_type 
                 ORDER BY count DESC
-            """)
+            """
+            )
             file_type_stats = dict(cursor.fetchall())
-            
+
             conn.close()
-            
+
             return {
-                'total_files': total_files,
-                'vendor_distribution': vendor_stats,
-                'file_type_distribution': file_type_stats,
-                'indexed_folders': len(self.indexed_folders),
-                'is_monitoring': self.is_monitoring
+                "total_files": total_files,
+                "vendor_distribution": vendor_stats,
+                "file_type_distribution": file_type_stats,
+                "indexed_folders": len(self.indexed_folders),
+                "is_monitoring": self.is_monitoring,
             }
-            
+
         except Exception as e:
             error(f"❌ Error getting statistics: {e}")
             return {}
 
 
 # Convenience function for easy integration
-def sync_index_with_filesystem(db_path: str, indexed_folders: Set[str], force_full_sync: bool = False, progress_callback: Optional[Callable] = None) -> Dict:
+def sync_index_with_filesystem(
+    db_path: str,
+    indexed_folders: Set[str],
+    force_full_sync: bool = False,
+    progress_callback: Optional[Callable] = None,
+) -> Dict:
     """
     🚀 PROFESSIONAL convenience function to sync file index with filesystem
-    
+
     Args:
         db_path: Path to SQLite database
         indexed_folders: Set of folders to index
         force_full_sync: If True, performs full rescan with streaming processing
         progress_callback: Optional callback for progress updates (rate, ETA, etc.)
-        
+
     Returns:
         Dictionary with sync statistics including performance metrics
     """
@@ -1480,52 +1519,52 @@ def sync_index_with_filesystem(db_path: str, indexed_folders: Set[str], force_fu
 # Test function
 def test_file_index_manager():
     """Test the file index manager"""
-    debug("🧪 Testing File Index Manager")
-    
+    print("🧪 Testing File Index Manager")
+
     import tempfile
     import shutil
-    
+
     # Create test environment
-    test_dir = tempfile.mkdtemp(prefix='patchio_test_')
-    test_db = os.path.join(test_dir, 'test_index.db')
-    
+    test_dir = tempfile.mkdtemp(prefix="patchio_test_")
+    test_db = os.path.join(test_dir, "test_index.db")
+
     try:
         # Create test files
         test_files = [
-            'test_patch.nki',
-            'another_sound.wav',
-            'hidden_file.nki'  # Should be ignored
+            "test_patch.nki",
+            "another_sound.wav",
+            "hidden_file.nki",  # Should be ignored
         ]
-        
+
         for filename in test_files:
             file_path = os.path.join(test_dir, filename)
-            with open(file_path, 'w') as f:
-                f.write('test content')
-        
+            with open(file_path, "w") as f:
+                f.write("test content")
+
         # Create hidden file
-        hidden_file = os.path.join(test_dir, '.hidden_file.nki')
-        with open(hidden_file, 'w') as f:
-            f.write('hidden content')
-        
-        debug(f"Created test directory: {test_dir}")
-        
+        hidden_file = os.path.join(test_dir, ".hidden_file.nki")
+        with open(hidden_file, "w") as f:
+            f.write("hidden content")
+
+        print(f"Created test directory: {test_dir}")
+
         # Test file index manager
         manager = FileIndexManager(test_db, {test_dir})
-        
+
         # Test sync
         results = manager.sync_index_with_filesystem(force_full_sync=True)
-        debug(f"Sync results: {results}")
-        
+        print(f"Sync results: {results}")
+
         # Test search
-        search_results = manager.search_files('test')
-        debug(f"Search results: {len(search_results)} files found")
-        
+        search_results = manager.search_files("test")
+        print(f"Search results: {len(search_results)} files found")
+
         # Test statistics
         stats = manager.get_statistics()
-        debug(f"Statistics: {stats}")
-        
-        info("✅ File Index Manager test completed successfully")
-        
+        print(f"Statistics: {stats}")
+
+        print("✅ File Index Manager test completed successfully")
+
     finally:
         # Cleanup
         shutil.rmtree(test_dir)
