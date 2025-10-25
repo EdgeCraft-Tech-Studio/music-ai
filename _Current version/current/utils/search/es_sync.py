@@ -2,7 +2,7 @@ import os
 import json
 import sqlite3
 import time
-from typing import Dict, Any, List, Optional, Iterable
+from typing import Dict, Any, List, Optional, Iterable, Tuple
 
 import appdirs
 
@@ -113,14 +113,18 @@ class ESSync:
     def _connect_sqlite(self):
         return sqlite3.connect(self.sqlite_path)
 
-    def _fetch_rows_in_batches(
-        self, where_clause: str = "", params: tuple = (), batch_size: int = 5000
-    ) -> Iterable[List[Dict[str, Any]]]:
-        fields = (
+    def _select_fields(self) -> str:
+        # Keep in sync with files table schema
+        return (
             "path, name, extension, file_type, parent_folder, "
             "modified_time, bpm, key, vendor, library, keywords, tags, "
             "instrument, genre, mood, format, created_at"
         )
+
+    def _fetch_rows_in_batches(
+        self, where_clause: str = "", params: tuple = (), batch_size: int = 5000
+    ) -> Iterable[List[Dict[str, Any]]]:
+        fields = self._select_fields()
         sql = f"SELECT {fields} FROM files"
         if where_clause:
             sql += f" WHERE {where_clause}"
@@ -139,6 +143,24 @@ class ESSync:
 
         conn.close()
 
+    def _fetch_rows_by_paths(self, paths: List[str]) -> List[Dict[str, Any]]:
+        if not paths:
+            return []
+        fields = self._select_fields()
+        placeholders = ",".join(["?"] * len(paths))
+        sql = f"SELECT {fields} FROM files WHERE path IN ({placeholders})"
+        conn = self._connect_sqlite()
+        cursor = conn.cursor()
+        cursor.execute(sql, tuple(paths))
+        cols = [d[0] for d in cursor.description]
+        rows = [dict(zip(cols, r)) for r in cursor.fetchall()]
+        conn.close()
+        return rows
+
+    def _fetch_row_by_path(self, path: str) -> Optional[Dict[str, Any]]:
+        rows = self._fetch_rows_by_paths([path])
+        return rows[0] if rows else None
+
     def bulk_full_sync(self, bulk_size: int = None) -> int:
         """
         Full reindex of the files table into Elasticsearch.
@@ -155,32 +177,6 @@ class ESSync:
                 doc = to_es_doc(row)
                 doc_id = doc["path"]  # path as unique id
                 actions.append({"_op_type": "index", "_id": doc_id, "_source": doc})
-            if actions:
-                self.es.bulk(actions)
-                total += len(actions)
-                debug(f"⚡ ES bulk synced {len(actions)} documents (total={total})")
-        info(f"✅ ES full sync completed: {total} documents")
-        return total
-
-    def incremental_sync_since(
-        self, since_epoch_seconds: int, bulk_size: int = None
-    ) -> int:
-        """
-        Upsert rows where created_at or modified_time >= since_epoch_seconds
-        """
-        if not self.enabled:
-            return 0
-        bulk_sz = bulk_size or ELASTICSEARCH_BULK_SIZE
-        total = 0
-
-        where_clause = "(created_at >= ? OR modified_time >= ?)"
-        params = (since_epoch_seconds, since_epoch_seconds)
-        for batch in self._fetch_rows_in_batches(where_clause, params):
-            actions = []
-            for row in batch:
-                doc = to_es_doc(row)
-                doc_id = doc["path"]
-                actions.append({"_op_type": "index", "_id": doc_id, "_source": doc})
                 if len(actions) >= bulk_sz:
                     self.es.bulk(actions)
                     total += len(actions)
@@ -188,83 +184,51 @@ class ESSync:
             if actions:
                 self.es.bulk(actions)
                 total += len(actions)
-        if total:
-            info(f"🔄 ES incremental sync: {total} documents upserted")
+                actions.clear()
+            debug(f"⚡ ES bulk synced (running total={total})")
+        info(f"✅ ES full sync completed: {total} documents")
         return total
 
+    def upsert_path(self, path: str) -> bool:
+        if not self.enabled:
+            return False
+        row = self._fetch_row_by_path(path)
+        if not row:
+            # If the row is not found, ensure it's deleted from ES
+            self.delete_path(path)
+            return False
+        doc = to_es_doc(row)
+        return self.es.index_doc(doc_id=path, source=doc)
 
-class ESBackgroundSync:
-    """
-    Tiny background synchronizer that:
-    - Performs an initial bulk sync on first run (if ES empty)
-    - Then performs incremental sync every N seconds based on last sync timestamp
-    Stores last sync state in a small JSON file in PatchIO config dir.
-    """
+    def delete_path(self, path: str) -> bool:
+        if not self.enabled:
+            return False
+        return self.es.delete_doc(path)
 
-    def __init__(self, sqlite_path: str, interval_seconds: int = 15):
-        self.sqlite_path = sqlite_path
-        self.interval = interval_seconds
-        self.sync = ESSync(sqlite_path)
-        self.state_path = self._state_file_path()
-        self._running = False
+    def bulk_upsert_paths(self, paths: List[str], bulk_size: int = None) -> int:
+        if not self.enabled or not paths:
+            return 0
+        bulk_sz = bulk_size or ELASTICSEARCH_BULK_SIZE
+        rows = self._fetch_rows_by_paths(paths)
+        total = 0
+        actions = []
+        for row in rows:
+            doc = to_es_doc(row)
+            actions.append({"_op_type": "index", "_id": doc["path"], "_source": doc})
+            if len(actions) >= bulk_sz:
+                self.es.bulk(actions)
+                total += len(actions)
+                actions.clear()
+        if actions:
+            self.es.bulk(actions)
+            total += len(actions)
+        return total
 
-    def _state_file_path(self) -> str:
-        config_dir = appdirs.user_config_dir(APP_NAME, APP_AUTHOR)
-        os.makedirs(config_dir, exist_ok=True)
-        return os.path.join(config_dir, "es_sync_state.json")
-
-    def _load_state(self) -> Dict[str, Any]:
-        try:
-            if os.path.exists(self.state_path):
-                with open(self.state_path, "r", encoding="utf-8") as f:
-                    return json.load(f)
-        except Exception:
-            pass
-        return {"last_sync_ts": 0}
-
-    def _save_state(self, state: Dict[str, Any]):
-        try:
-            with open(self.state_path, "w", encoding="utf-8") as f:
-                json.dump(state, f)
-        except Exception as e:
-            warning(f"⚠️ Could not persist ES sync state: {e}")
-
-    def start(self):
-        if not self.sync.is_enabled():
-            info("ℹ️ ES background sync disabled/not available")
-            return
-        import threading
-
-        self._running = True
-        t = threading.Thread(target=self._run_loop, daemon=True)
-        t.start()
-        info("🚀 ES background incremental sync started")
-
-    def stop(self):
-        self._running = False
-
-    def _run_loop(self):
-        state = self._load_state()
-        last_ts = int(state.get("last_sync_ts", 0))
-
-        # Initial sync on first run (if needed)
-        try:
-            if last_ts == 0:
-                info("🔁 Performing initial ES full sync...")
-                self.sync.bulk_full_sync()
-                last_ts = int(time.time())
-                state["last_sync_ts"] = last_ts
-                self._save_state(state)
-        except Exception as e:
-            error(f"❌ Initial ES full sync failed: {e}")
-
-        while self._running:
-            try:
-                # Incremental sync based on last timestamp
-                upserted = self.sync.incremental_sync_since(last_ts)
-                last_ts = int(time.time())
-                state["last_sync_ts"] = last_ts
-                self._save_state(state)
-            except Exception as e:
-                error(f"❌ ES incremental sync failed: {e}")
-            time.sleep(self.interval)
+    def bulk_delete_paths(self, paths: List[str]) -> int:
+        if not self.enabled or not paths:
+            return 0
+        actions = [{"_op_type": "delete", "_id": p} for p in paths]
+        if not actions:
+            return 0
+        ok = self.es.bulk(actions)
+        return len(paths) if ok else 0

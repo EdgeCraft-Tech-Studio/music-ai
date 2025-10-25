@@ -282,6 +282,7 @@ class SearchModel:
     def _build_es_bool_query(self, query_text: str) -> Dict[str, Any]:
         """
         Convert the bubble query into ES bool query format.
+        Fixed to handle partial matches and standard analyzer properly.
         """
         or_terms, and_terms, not_terms, or_quoted, and_quoted, not_quoted = (
             self._parse_bubble_query(query_text.strip())
@@ -308,14 +309,15 @@ class SearchModel:
                     }
                 }
             else:
-                # Multi_match with fuzziness
-                multi_match = {
+                # For unquoted terms: use multiple approaches for better matching
+                # 1. Standard multi_match with cross_fields for better token matching
+                standard_match = {
                     "multi_match": {
                         "query": term,
-                        "operator": "and",
-                        "fuzziness": "AUTO",
+                        "type": "cross_fields",  # Better for matching across multiple fields
                         "fields": [
                             "name^5",
+                            "name.ac^3",  # Include autocomplete field
                             "library^4",
                             "vendor^4",
                             "fulltext^2",
@@ -324,21 +326,27 @@ class SearchModel:
                             "instrument",
                             "tags",
                         ],
+                        "operator": "or",  # Match any term in multi-term queries
                     }
                 }
 
-                # Additional optional queries
-            term_query = {"term": {"vendor.raw": term.lower()}}  # exact vendor match
-            exists_query = {
-                "exists": {"field": "instrument"}
-            }  # example: has instrument
-            prefix_query = {"prefix": {"name": term.lower()}}  # autocomplete-like
-            wildcard_query = {"wildcard": {"path": f"*{term}*"}}  # path pattern match
+                # 2. Wildcard query for partial matches in key fields
+                wildcard_queries = [
+                    {"wildcard": {"name": f"*{term}*"}},
+                    {"wildcard": {"path": f"*{term}*"}},
+                    {"wildcard": {"vendor": f"*{term}*"}},
+                    {"wildcard": {"library": f"*{term}*"}},
+                ]
 
-            # Combine them in a bool should to boost relevance
+                # 3. Prefix query for beginning-of-word matches
+                prefix_queries = [
+                    {"prefix": {"name.ac": term.lower()}},
+                ]
+
+                # Combine all approaches - any of them matching is sufficient
             return {
                 "bool": {
-                    "should": [multi_match, term_query, prefix_query, wildcard_query],
+                    "should": [standard_match, *wildcard_queries, *prefix_queries],
                     "minimum_should_match": 1,
                 }
             }
@@ -347,17 +355,29 @@ class SearchModel:
         should = []
         must_not = []
 
+        # Process AND terms (must match all)
         for term, quoted in zip(and_terms, and_quoted):
             must.append(term_to_query(term, quoted))
 
+        # Process OR terms (should match any)
         for term, quoted in zip(or_terms, or_quoted):
             should.append(term_to_query(term, quoted))
 
+        # Process NOT terms (must not match any)
         for term, quoted in zip(not_terms, not_quoted):
             must_not.append(term_to_query(term, quoted))
 
-        # If only OR terms, ensure at least one matches
-        bool_query = {"must": must, "should": should, "must_not": must_not}
+        # Build the final bool query
+        bool_query = {}
+
+        if must:
+            bool_query["must"] = must
+        if should:
+            bool_query["should"] = should
+        if must_not:
+            bool_query["must_not"] = must_not
+
+        # If we only have OR terms, we need at least one to match
         if should and not must:
             bool_query["minimum_should_match"] = 1
 

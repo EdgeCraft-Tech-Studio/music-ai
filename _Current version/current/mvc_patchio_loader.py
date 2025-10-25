@@ -17,13 +17,8 @@ from utils.logger import debug, info, warning, error, critical
 # UI file path constant - get directly from core settings
 from settings.core_settings import UI_FILE_PATH, ICON_PATHS, ICON_SIZES
 from models.user_settings_model import UserSettingsModel
-from settings.core_settings import ELASTICSEARCH_ENABLED
 
 settings = UserSettingsModel()
-try:
-    from utils.search.es_sync import ESBackgroundSync
-except Exception:
-    ESBackgroundSync = None
 
 # Debug: Print what we got from settings
 debug(f"🔍 Debug - UI_FILE_PATH from core settings: {UI_FILE_PATH}")
@@ -63,30 +58,7 @@ class MVCPatchIOLoader:
         # Setup icons (like the original)
         self.setup_icons()
 
-        # --- ✅ Start background Elasticsearch sync
-        try:
-            if ELASTICSEARCH_ENABLED and ESBackgroundSync is not None:
-                # Pull SQLite path from SearchModel instance created by MainController
-                sqlite_path = None
-                try:
-                    sqlite_path = (
-                        self.main_controller.search_controller.search_model.db_path
-                    )
-                except Exception:
-                    pass
-
-                if sqlite_path:
-                    self._es_bg_sync = ESBackgroundSync(
-                        sqlite_path, interval_seconds=15
-                    )
-                    self._es_bg_sync.start()
-                    info("✅ Background Elasticsearch sync started successfully.")
-                else:
-                    warning("⚠️ Could not determine SQLite path for ESBackgroundSync")
-        except Exception as e:
-            warning(f"⚠️ ES background sync not started: {e}")
-
-        # ✅ Return controller last, after background sync setup
+        # ✅ Return controller last
         return self.main_controller
 
     def load_ui_file(self):
