@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-File Index Manager for PatchIO
-Comprehensive system for keeping file index in sync with filesystem
+File Index Manager for PatchIO handle_file_event    
+Comprehensive system for keeping file index in sync with filesystem 
 Handles startup sync, real-time monitoring, and efficient change detection
 """
 
@@ -150,6 +150,27 @@ class FileIndexManager:
         except Exception as e:
             error(f"❌ Error initializing database: {e}")
             raise
+
+    #meilisearch
+    def _sync_to_meilisearch(self, file_paths: List[str], operation: str = "upsert"):
+        """
+        🚀 Sync files to MeiliSearch via SearchModel _apply_changes
+        """
+        try:
+            # Import and initialize SearchModel
+            from models.search_model import SearchModel
+            
+            # Create SearchModel instance
+            search_model = SearchModel()
+            
+            if operation == "upsert":
+                search_model.bulk_sync_to_meilisearch(file_paths, "upsert")
+            elif operation == "delete":
+                search_model.bulk_sync_to_meilisearch(file_paths, "delete")
+                
+        except Exception as e:
+            warning(f"⚠️ MeiliSearch sync failed: {e}")
+
 
     def sync_index_with_filesystem(
         self,
@@ -713,6 +734,7 @@ class FileIndexManager:
             f"   Final rate: {rate:.0f} files/sec, Total time: {total_time:.1f} seconds"
         )
 
+
     def _process_batch(self, batch_data: List[Tuple], inserted_paths: List[str]):
         if not batch_data:
             return
@@ -726,7 +748,7 @@ class FileIndexManager:
                 INSERT OR IGNORE INTO files 
                 (path, name, extension, file_type, parent_folder, 
                 modified_time, file_size, file_hash, vendor, library,
-                                           created_at, updated_at)
+                                        created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'), strftime('%s', 'now'))
             """
 
@@ -753,6 +775,14 @@ class FileIndexManager:
                 self.es_sync.bulk_upsert_paths(inserted_paths)
         except Exception as e:
             warning(f"⚠️ ES bulk upsert (batch) failed: {e}")
+
+        # 🚀 MeiliSearch bulk sync for this batch
+        try:
+            self._sync_to_meilisearch(inserted_paths, "upsert")
+        except Exception as e:
+            warning(f"⚠️ MeiliSearch bulk sync (batch) failed: {e}")
+
+
 
     def _simple_extract_vendor_library(self, file_path: str) -> Tuple[str, str]:
         """Simple fallback vendor/library extraction"""
@@ -792,8 +822,10 @@ class FileIndexManager:
     def _find_potential_renames(self, db_files: Dict, fs_files: Dict, changes: Dict):
         pass  # unchanged (optional)
 
+
+
     def _apply_changes(self, changes: Dict):
-        """🚀 PROFESSIONAL batch database operations to handle 1.2M+ files efficiently"""
+        """🚀 PROFESSIONAL batch database operations with MeiliSearch sync"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
@@ -804,7 +836,7 @@ class FileIndexManager:
         rename_new_paths = []
 
         try:
-            # 🚀 BATCH INSERT - Add new files in batches to avoid UNIQUE constraint errors
+             # 🚀 BATCH INSERT - Add new files in batches to avoid UNIQUE constraint errors
             if changes["to_add"]:
                 info(
                     f"📝 Adding {len(changes['to_add'])} files in batches of {self.batch_size}..."
@@ -966,6 +998,18 @@ class FileIndexManager:
         except Exception as e:
             warning(f"⚠️ ES sync for applied changes failed: {e}")
 
+        # 🚀 MeiliSearch sync for applied changes
+        try:
+            if add_paths or update_paths or rename_new_paths:
+                all_upsert_paths = list(set(add_paths + update_paths + rename_new_paths))
+                self._sync_to_meilisearch(all_upsert_paths, "upsert")
+            
+            if remove_paths or rename_old_paths:
+                all_delete_paths = list(set(remove_paths + rename_old_paths))
+                self._sync_to_meilisearch(all_delete_paths, "delete")
+        except Exception as e:
+            warning(f"⚠️ MeiliSearch sync for applied changes failed: {e}")
+    
     def _update_last_sync_time(self, sync_type: str):
         """Update the last sync timestamp"""
         try:
@@ -1121,20 +1165,38 @@ class FileIndexManager:
             finally:
                 self.is_monitoring = False
 
+
+
     def _handle_real_time_event(self, event):
-        """DB commit first, then ES real-time sync (SQLite is source of truth)"""
+        """DB commit first, then ES and MeiliSearch real-time sync"""
+        print(f'event: {event.event_type}')
+        print(f'event: {event.event_type}')
+        print(f'event: {event.event_type}')
+        print(f'event: {event.event_type}')
+        print(f'event: {event.event_type}')
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-
             if event.event_type == "created":
                 self._handle_file_created(cursor, event.path)
+                self._sync_to_meilisearch([event.path], "upsert") 
+                
             elif event.event_type == "deleted":
                 self._handle_file_deleted(cursor, event.path)
+                self._sync_to_meilisearch([event.path], "delete")
+                
             elif event.event_type == "moved":
                 self._handle_file_moved(cursor, event.path, event.dest_path)
+               
+                if event.dest_path:
+                    self._sync_to_meilisearch([event.path], "delete")
+                    self._sync_to_meilisearch([event.dest_path], "upsert")
+                else:
+                    self._sync_to_meilisearch([event.path], "delete")
+                    
             elif event.event_type == "modified":
                 self._handle_file_modified(cursor, event.path)
+                self._sync_to_meilisearch([event.path], "upsert")
 
             conn.commit()
             conn.close()
@@ -1143,7 +1205,7 @@ class FileIndexManager:
             error(f"❌ Error handling real-time event: {e}")
             return
 
-        # After DB commit, perform real-time ES sync
+        # After DB commit, perform real-time ES sync (your existing code)
         try:
             if self.es_sync and self.es_sync.is_enabled():
                 if event.event_type == "created":
@@ -1154,13 +1216,13 @@ class FileIndexManager:
                     self.es_sync.upsert_path(event.path)
                 elif event.event_type == "moved":
                     if event.dest_path:
-                        # ensure old removed and new upserted
                         self.es_sync.delete_path(event.path)
                         self.es_sync.upsert_path(event.dest_path)
                     else:
                         self.es_sync.delete_path(event.path)
         except Exception as e:
             warning(f"⚠️ Real-time ES sync failed: {e}")
+
 
     def _handle_file_created(self, cursor, file_path: str):
         """Handle file creation event with optimized processing"""
@@ -1213,6 +1275,7 @@ class FileIndexManager:
         if cursor.rowcount > 0:
             info(f"➖ Removed file: {os.path.basename(file_path)}")
 
+
     def _handle_file_moved(self, cursor, old_path: str, new_path: str):
         """Handle file move/rename event with optimized processing"""
         # Check if moved to Trash (macOS deletion)
@@ -1244,45 +1307,61 @@ class FileIndexManager:
                 file_hash = self._calculate_file_hash(new_path)
                 vendor, library = self._fast_extract_vendor_library(new_path)
 
-                cursor.execute(
-                    """
-                    UPDATE files 
-                    SET path = ?, name = ?, modified_time = ?, file_size = ?, 
-                        file_hash = ?, vendor = ?, library = ?, extension = ?, parent_folder = ?, 
-                        updated_at = strftime('%s', 'now')
-                    WHERE path = ?
-                """,
-                    (
-                        new_path,
-                        file_name,
-                        stat.st_mtime,
-                        stat.st_size,
-                        file_hash,
-                        vendor,
-                        library,
-                        extension,
-                        parent_folder,
-                        old_path,
-                    ),
-                )
+                # First, check if old_path exists in database
+                cursor.execute("SELECT COUNT(*) FROM files WHERE path = ?", (old_path,))
+                old_file_exists = cursor.fetchone()[0] > 0
 
-                if cursor.rowcount > 0:
-                    info(
-                        f"🔄 Moved file index_manager: {os.path.basename(old_path)} -> {file_name}"
+                if old_file_exists:
+                    # Update existing record
+                    cursor.execute(
+                        """
+                        UPDATE files 
+                        SET path = ?, name = ?, modified_time = ?, file_size = ?, 
+                            file_hash = ?, vendor = ?, library = ?, extension = ?, parent_folder = ?, 
+                            updated_at = strftime('%s', 'now')
+                        WHERE path = ?
+                    """,
+                        (
+                            new_path,
+                            file_name,
+                            stat.st_mtime,
+                            stat.st_size,
+                            file_hash,
+                            vendor,
+                            library,
+                            extension,
+                            parent_folder,
+                            old_path,
+                        ),
                     )
+
+                    if cursor.rowcount > 0:
+                        info(f"🔄 Renamed file: {os.path.basename(old_path)} -> {file_name}")
+                    else:
+                        # Update failed, delete old and create new
+                        cursor.execute("DELETE FROM files WHERE path = ?", (old_path,))
+                        self._handle_file_created(cursor, new_path)
+                        info(f"🔄 Renamed file (fallback): {os.path.basename(old_path)} -> {file_name}")
                 else:
-                    # File not in database, add it
+                    # Old file not in database, just create the new one
                     self._handle_file_created(cursor, new_path)
+                    info(f"➕ Added renamed file: {file_name}")
 
             except Exception as e:
                 error(f"❌ Error moving file {old_path}: {e}")
+                # Fallback: ensure old file is removed and new one is added
+                try:
+                    cursor.execute("DELETE FROM files WHERE path = ?", (old_path,))
+                    self._handle_file_created(cursor, new_path)
+                except Exception as fallback_error:
+                    error(f"❌ Fallback rename also failed: {fallback_error}")
         else:
-            # File moved outside indexed area, remove it
+            # File moved outside indexed area, remove the old one
             cursor.execute("DELETE FROM files WHERE path = ?", (old_path,))
             if cursor.rowcount > 0:
-                info(
-                    f"➖ Moved file outside indexed area: {os.path.basename(old_path)}"
-                )
+                info(f"➖ Moved file outside indexed area: {os.path.basename(old_path)}")
+
+
 
     def _handle_file_modified(self, cursor, file_path: str):
         """Handle file modification event with optimized processing"""
@@ -1366,8 +1445,9 @@ class FileIndexManager:
             error(f"❌ Error getting file metadata: {e}")
             return None
 
+
     def update_file_metadata(self, file_path: str, metadata: Dict):
-        """Update metadata for a specific file"""
+        """Update metadata for a specific file and sync to search engines"""
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
@@ -1395,113 +1475,122 @@ class FileIndexManager:
             if cursor.rowcount > 0:
                 info(f"📝 Updated metadata for: {os.path.basename(file_path)}")
 
-            # ES could also be updated if metadata fields are included in ES mapping
+            # Sync to both search engines
             try:
+                # ES sync
                 if self.es_sync and self.es_sync.is_enabled():
                     self.es_sync.upsert_path(file_path)
             except Exception as e:
                 warning(f"⚠️ ES upsert after metadata update failed: {e}")
 
+            # MeiliSearch sync
+            try:
+                self._sync_to_meilisearch([file_path], "upsert")
+            except Exception as e:
+                warning(f"⚠️ MeiliSearch sync after metadata update failed: {e}")
+
         except Exception as e:
             error(f"❌ Error updating file metadata: {e}")
 
-    def search_files(self, query: str, limit: int = 100) -> List[Dict]:
-        """Search for files in the index"""
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
 
-            # Simple search across name, vendor, library, tags, keywords
-            cursor.execute(
-                """
-                SELECT path, name, vendor, library, file_type, tags, keywords, instrument, genre, mood
-                FROM files 
-                WHERE name LIKE ? OR vendor LIKE ? OR library LIKE ? OR tags LIKE ? OR keywords LIKE ?
-                ORDER BY name
-                LIMIT ?
-            """,
-                (
-                    f"%{query}%",
-                    f"%{query}%",
-                    f"%{query}%",
-                    f"%{query}%",
-                    f"%{query}%",
-                    limit,
-                ),
-            )
 
-            results = []
-            for row in cursor.fetchall():
-                results.append(
-                    {
-                        "path": row[0],
-                        "name": row[1],
-                        "vendor": row[2],
-                        "library": row[3],
-                        "file_type": row[4],
-                        "tags": row[5],
-                        "keywords": row[6],
-                        "instrument": row[7],
-                        "genre": row[8],
-                        "mood": row[9],
-                    }
+        def search_files(self, query: str, limit: int = 100) -> List[Dict]:
+            """Search for files in the index"""
+            try:
+                conn = sqlite3.connect(self.db_path)
+                cursor = conn.cursor()
+
+                # Simple search across name, vendor, library, tags, keywords
+                cursor.execute(
+                    """
+                    SELECT path, name, vendor, library, file_type, tags, keywords, instrument, genre, mood
+                    FROM files 
+                    WHERE name LIKE ? OR vendor LIKE ? OR library LIKE ? OR tags LIKE ? OR keywords LIKE ?
+                    ORDER BY name
+                    LIMIT ?
+                """,
+                    (
+                        f"%{query}%",
+                        f"%{query}%",
+                        f"%{query}%",
+                        f"%{query}%",
+                        f"%{query}%",
+                        limit,
+                    ),
                 )
 
-            conn.close()
-            return results
+                results = []
+                for row in cursor.fetchall():
+                    results.append(
+                        {
+                            "path": row[0],
+                            "name": row[1],
+                            "vendor": row[2],
+                            "library": row[3],
+                            "file_type": row[4],
+                            "tags": row[5],
+                            "keywords": row[6],
+                            "instrument": row[7],
+                            "genre": row[8],
+                            "mood": row[9],
+                        }
+                    )
 
-        except Exception as e:
-            error(f"❌ Error searching files: {e}")
-            return []
+                conn.close()
+                return results
 
-    def get_statistics(self) -> Dict:
-        """Get database statistics"""
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
+            except Exception as e:
+                error(f"❌ Error searching files: {e}")
+                return []
 
-            # Get total file count
-            cursor.execute("SELECT COUNT(*) FROM files")
-            total_files = cursor.fetchone()[0]
+        def get_statistics(self) -> Dict:
+            """Get database statistics"""
+            try:
+                conn = sqlite3.connect(self.db_path)
+                cursor = conn.cursor()
 
-            # Get vendor distribution
-            cursor.execute(
+                # Get total file count
+                cursor.execute("SELECT COUNT(*) FROM files")
+                total_files = cursor.fetchone()[0]
+
+                # Get vendor distribution
+                cursor.execute(
+                    """
+                    SELECT vendor, COUNT(*) as count 
+                    FROM files 
+                    WHERE vendor IS NOT NULL AND vendor != 'Unknown Vendor'
+                    GROUP BY vendor 
+                    ORDER BY count DESC 
+                    LIMIT 10
                 """
-                SELECT vendor, COUNT(*) as count 
-                FROM files 
-                WHERE vendor IS NOT NULL AND vendor != 'Unknown Vendor'
-                GROUP BY vendor 
-                ORDER BY count DESC 
-                LIMIT 10
-            """
-            )
-            vendor_stats = dict(cursor.fetchall())
+                )
+                vendor_stats = dict(cursor.fetchall())
 
-            # Get file type distribution
-            cursor.execute(
+                # Get file type distribution
+                cursor.execute(
+                    """
+                    SELECT file_type, COUNT(*) as count 
+                    FROM files 
+                    WHERE file_type IS NOT NULL
+                    GROUP BY file_type 
+                    ORDER BY count DESC
                 """
-                SELECT file_type, COUNT(*) as count 
-                FROM files 
-                WHERE file_type IS NOT NULL
-                GROUP BY file_type 
-                ORDER BY count DESC
-            """
-            )
-            file_type_stats = dict(cursor.fetchall())
+                )
+                file_type_stats = dict(cursor.fetchall())
 
-            conn.close()
+                conn.close()
 
-            return {
-                "total_files": total_files,
-                "vendor_distribution": vendor_stats,
-                "file_type_distribution": file_type_stats,
-                "indexed_folders": len(self.indexed_folders),
-                "is_monitoring": self.is_monitoring,
-            }
+                return {
+                    "total_files": total_files,
+                    "vendor_distribution": vendor_stats,
+                    "file_type_distribution": file_type_stats,
+                    "indexed_folders": len(self.indexed_folders),
+                    "is_monitoring": self.is_monitoring,
+                }
 
-        except Exception as e:
-            error(f"❌ Error getting statistics: {e}")
-            return {}
+            except Exception as e:
+                error(f"❌ Error getting statistics: {e}")
+                return {}
 
 
 # Convenience function for easy integration
@@ -1582,4 +1671,4 @@ def test_file_index_manager():
 
 
 if __name__ == "__main__":
-    test_file_index_manager()
+    test_file_index_manager()  

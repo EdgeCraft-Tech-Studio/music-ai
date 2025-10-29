@@ -2,8 +2,10 @@
 # -*- coding: utf-8 -*-
 """
 Search Model - MVC Model for search functionality
-Extracted from core_search.py
+Extracted from core_search.py 
 """
+
+
 
 import os
 import re
@@ -94,6 +96,265 @@ class SearchModel:
         self._es_client = None
         self._es_enabled = bool(ELASTICSEARCH_ENABLED)
         self._init_es_if_available()
+
+        self.meili_client = None
+        self.meili_index = None
+        self.meili_Search_active = False
+        self._setup_meilisearch()
+
+
+    def _setup_meilisearch(self):
+        """Setup MeiliSearch if it is enabled in core settings."""
+
+        try:
+            from settings.core_settings import MEILISEARCH_ACTIVE, MEILISEARCH_URL, MEILISEARCH_INDEX_NAME
+
+            if MEILISEARCH_ACTIVE:
+                info("✅ Setting Up MeiliSearch, please wait...")
+
+                import meilisearch
+
+                # ✅ Correct way to initialize the client
+                self.meili_client = meilisearch.Client(MEILISEARCH_URL)
+
+                # ✅ Correct way to access or create an index
+                self.meili_index = self.meili_client.index(MEILISEARCH_INDEX_NAME)
+                self.meili_Search_active = True
+
+                try:
+                    health = self.meili_client.health()
+                    self.is_connected = True
+                    info(f"✅ MeiliSearch is {health['status']}")
+
+                    # Now check and import data if necessary
+                    self._check_data_import_to_meilisearch()
+                except Exception as e:
+                    warning(f"⚠️ Can't connect to MeiliSearch: {e}")
+                    self.meili_Search_active = False
+            else:
+                info("ℹ️ MeiliSearch is disabled in settings.core_settings")
+
+        except ImportError:
+            warning("⚠️ MeiliSearch not installed. Falling back to SQLite search.")
+            self.meili_Search_active = False
+        except Exception as e:
+            warning(f"❌ Failed to setup MeiliSearch: {e}. Falling back to SQLite search.")
+            self.meili_Search_active = False
+
+        
+    def _check_data_import_to_meilisearch(self):
+        """ Checking if meilisearch have data, if it have which means we are not activiting meilisearch for first time """
+        """ if first time or if something happened on meilisearch engin and lost data we gone import it from the default Sqlite  """
+        if not self.meili_Search_active or not os.path.exists(self.db_path):
+            return
+        
+        try:
+            stats = self.meili_index.get_stats()
+            if stats.number_of_documents > 0:
+                info(f"✅ MeiliSearch already has : {stats.number_of_documents} datas, So We don't need to import from sql")
+                return
+        except Exception as e:
+            if "index_not_found" in str(e) or "Index" in str(e) and "not found" in str(e):
+                info("ℹ️ Data Not Found On MeilliSearch (first time setup) importing from default sqlite....")
+            else:
+                error(f"Failed to check if data exists on Meilisearch! {e}")
+
+        """ We can't find data on meilisearch so we import from the default sql """
+        info("ℹ️ importing from default sqlite....")
+        try:
+                conn = sqlite3.connect(self.db_path)
+                cursor = conn.cursor()
+                cursor.execute("select id, path, name, vendor, library, instrument, genre, tags, file_type From files")
+                rows = cursor.fetchall()
+
+                documents = []
+                for row in rows:
+                    file_id, path, name, vendor, library, instunment, genre, tags, file_type = row
+                    documents.append({
+                        'id': str(file_id),
+                        'path': path or '',
+                        'name': name or '',
+                        'vendor': vendor or 'Unknown Vendor',
+                        'library': library or 'Unknown Library',
+                        'genre': genre or '',
+                        'tags': tags or '',
+                        'file_type': file_type or 'File'
+
+                    })
+
+                self.meili_index.add_documents(documents)
+                conn.close()
+                info(f" Data imported Successfully")
+        except Exception as e:
+                error(f" Failed to import from sqlite data to Meillisearch: {e}")
+                self.meili_Search_active = False 
+
+
+
+
+    def sync_file_to_meilisearch(self, file_path: str, operation: str = "upsert") -> bool:
+
+      
+        print("operation is upsert")
+        print(f'operation is {operation}')
+
+        if not self.meili_Search_active or not self.meili_index:
+            debug("ℹ️ MeiliSearch not active, skipping sync")
+            return False
+        
+        try:
+            if operation == "delete":
+                conn = sqlite3.connect(self.db_path)
+                cursor = conn.cursor()
+                cursor.execute("SELECT id FROM files WHERE path = ?", (file_path,))
+                row = cursor.fetchone()
+                conn.close()
+                
+                if row:
+                    document_id = str(row[0])
+                    self.meili_index.delete_document(document_id)
+                    info(f"🗑️ Removed from MeiliSearch (by ID): {os.path.basename(file_path)}")
+                    return True
+                else:
+                    debug(f"File not in SQLite, searching MeiliSearch by path: {file_path}")
+                    search_results = self.meili_index.search("", {
+                        "filter": f"path = \"{file_path}\"",  
+                        "limit": 1
+                    })
+                
+                if search_results['hits']:
+                    document_id = search_results['hits'][0]['id']
+                    self.meili_index.delete_document(document_id)
+                    info(f"🗑️ Removed from MeiliSearch (by path search): {os.path.basename(file_path)}")
+                    return True
+                else:
+                    warning(f"⚠️ File not found in MeiliSearch for deletion: {file_path}")
+                    return False
+                    
+            
+           
+            elif operation == "upsert":
+                # Get file data from SQLite database
+                conn = sqlite3.connect(self.db_path)
+                cursor = conn.cursor()
+                
+                cursor.execute("""
+                    SELECT id, path, name, vendor, library, instrument, genre, tags, file_type 
+                    FROM files WHERE path = ?
+                """, (file_path,))
+                
+                row = cursor.fetchone()
+                conn.close()
+                if row:
+                    file_id, path, name, vendor, library, instrument, genre, tags, file_type = row
+                    
+                    document = {
+                        'id': str(file_id),
+                        'path': path or '',
+                        'name': name or '',
+                        'vendor': vendor or 'Unknown Vendor',
+                        'library': library or 'Unknown Library',
+                        'instrument': instrument or '',
+                        'genre': genre or '',
+                        'tags': tags or '',
+                        'file_type': file_type or 'File'
+                    }
+                    
+                    #delete and insert meilisearchf search_results['hits']:
+                    search_results = self.meili_index.search("", {
+                        "filter": f"path = \"{file_path}\"",  
+                        "limit": 1
+                    })
+                    print("result")
+                    print(f"result  {search_results}")
+                    document_id = search_results['hits'][0]['id']
+                    info(f"document  {document_id}")
+                    self.meili_index.delete_document(document_id)
+                    info(f"🗑️ Removed from MeiliSearch (by path search): {os.path.basename(file_path)}")
+
+                    # Upsert to MeiliSearch
+                    self.meili_index.add_documents([document])
+                    info(f"📝 Synced to MeiliSearch: {name}")
+                    return True
+                else:
+                    warning(f"⚠️ File not found in database for MeiliSearch sync: {file_path}")
+                    return False
+        
+        except Exception as e:
+            error(f"❌ MeiliSearch sync failed for {file_path}: {e}")
+            return False
+
+    def bulk_sync_to_meilisearch(self, file_paths: List[str], operation: str = "upsert") -> bool:
+        
+        if not self.meili_Search_active or not self.meili_index:
+            debug("ℹ️ MeiliSearch not active, skipping bulk sync")
+            return False
+        
+        if not file_paths:
+            return True
+        
+        try:
+            if operation == "delete":
+                # Better approach: Get IDs from SQLite first, then delete from MeiliSearch
+                placeholders = ','.join('?' * len(file_paths)) 
+                conn = sqlite3.connect(self.db_path)
+                cursor = conn.cursor()
+                
+                cursor.execute(f"""
+                    SELECT id FROM files WHERE path IN ({placeholders})   
+                """, file_paths)
+                
+                rows = cursor.fetchall()
+                conn.close()  
+                
+                document_ids = [str(row[0]) for row in rows]
+                
+                if document_ids:
+                    self.meili_index.delete_documents(document_ids)
+                    info(f"🗑️ Bulk removed {len(document_ids)} files from MeiliSearch")
+                return True
+                
+            elif operation == "upsert":
+                # Get all file data from SQLite database in one query
+                placeholders = ','.join('?' * len(file_paths))
+                conn = sqlite3.connect(self.db_path)
+                cursor = conn.cursor()
+                
+                cursor.execute(f"""
+                    SELECT id, path, name, vendor, library, instrument, genre, tags, file_type 
+                    FROM files WHERE path IN ({placeholders})
+                """, file_paths)
+                
+                rows = cursor.fetchall()
+                conn.close()
+                
+                documents = []
+                for row in rows:
+                    file_id, path, name, vendor, library, instrument, genre, tags, file_type = row
+                    documents.append({
+                        'id': str(file_id),
+                        'path': path or '',
+                        'name': name or '',
+                        'vendor': vendor or 'Unknown Vendor',
+                        'library': library or 'Unknown Library',
+                        'instrument': instrument or '',
+                        'genre': genre or '',
+                        'tags': tags or '',
+                        'file_type': file_type or 'File'
+                    })
+                
+                if documents:
+                    self.meili_index.add_documents(documents)    
+                    info(f"📝 Bulk synced {len(documents)} files to MeiliSearch")
+                return True
+        
+        except Exception as e:
+            error(f"❌ MeiliSearch bulk sync failed: {e}")
+            return False
+
+
+
+
 
     def _init_es_if_available(self):
         if not self._es_enabled:
@@ -265,15 +526,79 @@ class SearchModel:
 
     def database_search(self, query: str) -> List[Dict[str, Any]]:
         """
-        The controller calls this. We transparently use ES if available,
+        The controller calls this. We transparently use Meilisearch or ES based on coresetting if one of them available,
         otherwise fallback to SQLite query as before.
         """
-        if self._es_client:
+        if self.meili_Search_active:
             try:
-                return self.elasticsearch_search(query)
+                return self._meili_search(query)
             except Exception as e:
-                warning(f"⚠️ Elasticsearch search failed, falling back to SQLite: {e}")
+                warning(f"⚠️ MeiliSearch failed, falling Elastic Search: {e}")
+        elif self._es_enabled:
+            if self._es_client:
+                try:
+                    return self.elasticsearch_search(query)
+                except Exception as e:
+                    warning(f"⚠️ Elasticsearch failed, falling back to SQLite: {e}")
         return self.sqlite_database_search(query)
+    
+
+    # --------------------
+    # Meilisearch
+    # --------------------
+    def _meili_search(self, query: str) -> List[Dict[str, Any]]:
+        """ now we are using meilisearch"""
+        info(f"🔍 Using MeiliSearch for : {query}")
+        
+        if not query.strip():
+            warning("⚠️ Empty search query!")
+            return []
+        
+        try:
+
+            search_results = self.meili_index.search(query.strip('"'), {
+                    'attributesToSearchOn': ['name', 'vendor', 'library', 'instrument', 'genre', 'tags', 'path'],
+                    'attributesToRetrieve': ['*'],
+                    'limit': MAX_TOTAL_RESULTS,
+                    'matchingStrategy': 'all', 
+                    
+                })
+
+            #uncomment this to raise intentional error and checking weather the default is continue
+            #raise Exception('intentional failure for debug to check if auto search SQLite continue if meilisearch server is not response')
+     
+            results = []   
+            for meili_hit in search_results['hits']: 
+                file_name = os.path.basename(meili_hit.get('path', '')) if meili_hit.get('path') else meili_hit.get('name', '')
+                
+                # meilisearch result document
+                result = {
+                    "id": int(meili_hit['id']), 
+                    "name": file_name,
+                    "path": meili_hit.get('path', ''),
+                    "vendor": meili_hit.get('vendor', 'Unknown Vendor'),
+                    "library": meili_hit.get('library', 'Unknown Library'),
+                    "instrument": meili_hit.get('instrument', ''),
+                    "genre": meili_hit.get('genre', ''),
+                    "tags": meili_hit.get('tags', ''),
+                    "file_type": meili_hit.get('file_type', 'File'),
+                    "type": "MeiliSearch Match",
+                    "is_audio": True
+                }
+                results.append(result)
+                debug(f"  ✅ We Successfully Found MeiliSearch match: {file_name}")
+            
+            info(f"📊 Total MeiliSearch found {len(results)} matching files")
+            return results
+            
+        except Exception as e:
+            error(f"⚠️ MeiliSearch error: {e}")
+            raise  # if faile go to default
+    
+                      
+
+    
+
 
     # --------------------
     # Elasticsearch search
@@ -428,7 +753,7 @@ class SearchModel:
         return results
 
     # --------------------
-    # SQLite fallback search (unchanged logic)
+    # SQLite fallback search (unchanged logic) 
     # --------------------
     def sqlite_database_search(self, query: str) -> List[Dict[str, Any]]:
         info(f"🗄️ Database Search (SQLite): {query}")

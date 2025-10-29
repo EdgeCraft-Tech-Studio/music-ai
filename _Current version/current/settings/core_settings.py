@@ -58,6 +58,7 @@ DEFAULT_EXTENSIONS = [
 DEFAULT_SEARCH_FOLDERS = [
     # Empty by default - users must configure folders in Preferences
     "/home/elvis/Music",
+    r'C:\Users\Abush\Pictures\New folder'
 ]
 # /home/elvis/.config/PatchIO
 
@@ -271,12 +272,16 @@ FILE_ICON_MAPPINGS = {
     ".7z": "📦",
 }
 
+
+
+
+
 # ============================================================================
 # ELASTICSEARCH CONFIGURATION
 # ============================================================================
 
 # Elasticsearch configuration
-ELASTICSEARCH_ENABLED = True
+ELASTICSEARCH_ENABLED = False
 ELASTICSEARCH_HOSTS = ["http://localhost:9200"]
 ELASTICSEARCH_USERNAME = None
 ELASTICSEARCH_PASSWORD = None
@@ -288,3 +293,12 @@ ELASTICSEARCH_BULK_CONCURRENCY = 2
 ELASTICSEARCH_MAX_RESULTS = 1000
 
 # curl -X GET "http://localhost:9200/patchio_files/_search?pretty&size=10"
+
+
+
+
+# MeiliSearch Configuration
+
+MEILISEARCH_ACTIVE = True
+MEILISEARCH_URL = "http://127.0.0.1:7700"
+MEILISEARCH_INDEX_NAME = "patchio_files"
