@@ -528,7 +528,7 @@ class SearchModel:
         """
         The controller calls this. We transparently use Meilisearch or ES based on coresetting if one of them available,
         otherwise fallback to SQLite query as before.
-        """
+        """ 
         if self.meili_Search_active:
             try:
                 return self._meili_search(query)
@@ -540,7 +540,9 @@ class SearchModel:
                     return self.elasticsearch_search(query)
                 except Exception as e:
                     warning(f"⚠️ Elasticsearch failed, falling back to SQLite: {e}")
-        return self.sqlite_database_search(query)
+        else:
+            info(f"🔍 Uding defaut search method sqlite")
+            return self.sqlite_database_search(query)
     
 
     # --------------------
@@ -755,6 +757,72 @@ class SearchModel:
     # --------------------
     # SQLite fallback search (unchanged logic) 
     # --------------------
+    def check_database_available(self, db_timeout_seconds: float = 2.0) -> bool:
+        """
+        Check if database is available and not locked by other processes.
+        Returns True if database is available, False if locked or unavailable.
+        
+        Args:
+            db_timeout_seconds: How long to wait for database to become available
+        """
+        try:
+            # 🚀 NEW: Try to get a quick connection to check database availability
+            conn = sqlite3.connect(self.db_path, timeout=db_timeout_seconds)
+            cursor = conn.cursor()
+            
+            # Try a simple query to test if database is responsive
+            cursor.execute("SELECT 1 FROM sqlite_master LIMIT 1")
+            cursor.fetchone()
+            
+            conn.close()
+            
+            # If we got here, database is available
+            debug("✅ Database is available for search")
+            return True
+            
+        except sqlite3.OperationalError as e:
+            if "database is locked" in str(e):
+                warning("⏳ Database is currently locked by background processes")
+                return False
+            else:
+                error(f"⚠️ Database error in availability check: {e}")
+                return False
+                
+        except Exception as e:
+            error(f"⚠️ Unexpected error checking database availability: {e}")
+            return False
+    
+    def wait_for_database(self, max_wait_seconds: float = 5.0, check_interval: float = 0.5):
+        import time
+        import threading
+        def worker():
+            start_time = time.time()
+            attempts = 0
+            info("🔄 Waiting for database to become available...")
+
+            while time.time() - start_time < max_wait_seconds:
+                attempts += 1
+
+                if self.check_database_available(db_timeout_seconds=check_interval):
+                    info(f"✅ Database became available after {attempts} attempts")
+                    return
+
+                if attempts % 3 == 0:
+                    elapsed = time.time() - start_time
+                    info(f"⏳ Still waiting... ({elapsed:.1f}s elapsed)")
+
+                time.sleep(check_interval)
+
+            warning(f"⏰ Database wait timeout after {max_wait_seconds} seconds")
+
+        # 🚀 Start the check in a background thread
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
+        return t
+
+
+
+
     def sqlite_database_search(self, query: str) -> List[Dict[str, Any]]:
         info(f"🗄️ Database Search (SQLite): {query}")
 
@@ -765,7 +833,21 @@ class SearchModel:
         if not query.strip():
             warning("⚠️ Empty search query!")
             return []
+        
 
+        # 🚀 IMPROVED: Check if database is available before searching
+        info("🔍 Checking if database is ready for search...")
+        if not self.check_database_available(db_timeout_seconds=1.0):
+            # Database is locked, try waiting for it
+            info("⏳ Database is busy, waiting for it to become available...")
+            
+            if not self.wait_for_database(max_wait_seconds=3.0, check_interval=0.3):
+                # Database still not available after waiting
+                info("💡 Please wait a moment for background tasks to complete, then try your search again")
+                return []  # Return empty results instead of error
+            else:
+                info("✅ Database is now available, proceeding with search...")
+        info("⏳ Database Available, Not Lock!")
         # Parse search terms
         try:
             or_terms, and_terms, not_terms, or_quoted, and_quoted, not_quoted = (
@@ -785,7 +867,7 @@ class SearchModel:
         results = []
 
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = sqlite3.connect(self.db_path) 
             cursor = conn.cursor()
 
             # Build SQL query for searching across all columns
@@ -923,6 +1005,175 @@ class SearchModel:
             )
 
         return results
+
+    # def sqlite_database_search(self, query: str) -> List[Dict[str, Any]]:
+    #     info(f"🗄️ Database Search (SQLite): {query}")
+
+    #     if not os.path.exists(self.db_path):
+    #         warning(f"⚠️ Database not found: {self.db_path}")
+    #         return []
+
+    #     if not query.strip():
+    #         warning("⚠️ Empty search query!")
+    #         return []
+
+    #     # Parse search terms
+    #     try:
+    #         or_terms, and_terms, not_terms, or_quoted, and_quoted, not_quoted = (
+    #             self._parse_bubble_query(query.strip())
+    #         )
+    #         debug(f"🔍 Parsed OR terms: {list(zip(or_terms, or_quoted))}")
+    #         debug(f"🔍 Parsed AND terms: {list(zip(and_terms, and_quoted))}")
+    #         debug(f"🔍 Parsed NOT terms: {list(zip(not_terms, not_quoted))}")
+    #     except Exception as e:
+    #         error(f"⚠️ Error parsing search terms: {e}")
+    #         return []
+
+    #     if not or_terms and not and_terms:
+    #         warning("⚠️ No valid search terms found!")
+    #         return []
+
+    #     results = []
+
+    #     try:
+    #         conn = sqlite3.connect(self.db_path)
+    #         cursor = conn.cursor()
+
+    #         # Build SQL query for searching across all columns
+    #         search_conditions = []
+    #         params = []
+
+    #         # OR conditions
+    #         if or_terms:
+    #             or_conditions = []
+    #             for term, quoted in zip(or_terms, or_quoted):
+    #                 or_conditions.append(
+    #                     """
+    #                     (LOWER(path) LIKE ? OR 
+    #                     LOWER(name) LIKE ? OR 
+    #                     LOWER(vendor) LIKE ? OR 
+    #                     LOWER(library) LIKE ? OR 
+    #                     LOWER(instrument) LIKE ? OR 
+    #                     LOWER(genre) LIKE ? OR 
+    #                     LOWER(tags) LIKE ?)
+    #                     """
+    #                 )
+    #                 search_param = f"%{term.lower()}%"
+    #                 params.extend([search_param] * 7)
+    #             if or_conditions:
+    #                 search_conditions.append(f"({' OR '.join(or_conditions)})")
+
+    #         # AND conditions
+    #         if and_terms:
+    #             and_conditions = []
+    #             for term, quoted in zip(and_terms, and_quoted):
+    #                 and_conditions.append(
+    #                     """
+    #                     (LOWER(path) LIKE ? OR 
+    #                     LOWER(name) LIKE ? OR 
+    #                     LOWER(vendor) LIKE ? OR 
+    #                     LOWER(library) LIKE ? OR 
+    #                     LOWER(instrument) LIKE ? OR 
+    #                     LOWER(genre) LIKE ? OR 
+    #                     LOWER(tags) LIKE ?)
+    #                     """
+    #                 )
+    #                 search_param = f"%{term.lower()}%"
+    #                 params.extend([search_param] * 7)
+    #             if and_conditions:
+    #                 search_conditions.append(f"({' AND '.join(and_conditions)})")
+
+    #         # NOT conditions
+    #         if not_terms:
+    #             not_conditions = []
+    #             for term, quoted in zip(not_terms, not_quoted):
+    #                 not_conditions.append(
+    #                     """
+    #                     NOT (LOWER(path) LIKE ? OR 
+    #                         LOWER(name) LIKE ? OR 
+    #                         LOWER(vendor) LIKE ? OR 
+    #                         LOWER(library) LIKE ? OR 
+    #                         LOWER(instrument) LIKE ? OR 
+    #                         LOWER(genre) LIKE ? OR 
+    #                         LOWER(tags) LIKE ?)
+    #                     """
+    #                 )
+    #                 search_param = f"%{term.lower()}%"
+    #                 params.extend([search_param] * 7)
+    #             if not_conditions:
+    #                 search_conditions.append(f"({' AND '.join(not_conditions)})")
+
+    #         # Build final query
+    #         if search_conditions:
+    #             where_clause = " AND ".join(search_conditions)
+    #             sql_query = f"""
+    #                 SELECT id, path, name, vendor, library, instrument, genre, tags, file_type
+    #                 FROM files 
+    #                 WHERE {where_clause}
+    #                 ORDER BY name
+    #                 LIMIT ?
+    #             """
+    #         else:
+    #             sql_query = """
+    #                 SELECT id, path, name, vendor, library, instrument, genre, tags, file_type
+    #                 FROM files 
+    #                 ORDER BY name
+    #                 LIMIT ?
+    #             """
+
+    #         # Limit to keep UI responsive
+    #         params.append(min(MAX_TOTAL_RESULTS, 1000))
+    #         debug(f"🔍 Executing SQL: {sql_query}")
+    #         debug(f"🔍 Parameters: {params}")
+
+    #         cursor.execute(sql_query, params)
+    #         rows = cursor.fetchall()
+
+    #         for row in rows:
+    #             (
+    #                 file_id,
+    #                 path,
+    #                 name,
+    #                 vendor,
+    #                 library,
+    #                 instrument,
+    #                 genre,
+    #                 tags,
+    #                 file_type,
+    #             ) = row
+
+    #             file_name = os.path.basename(path) if path else name
+
+    #             results.append(
+    #                 {
+    #                     "id": file_id,
+    #                     "name": file_name,
+    #                     "path": path or "",
+    #                     "vendor": vendor or "Unknown Vendor",
+    #                     "library": library or "Unknown Library",
+    #                     "instrument": instrument or "",
+    #                     "genre": genre or "",
+    #                     "tags": tags or "",
+    #                     "file_type": file_type or "File",
+    #                     "type": "Database Match",
+    #                     "is_audio": True,
+    #                 }
+    #             )
+
+    #         conn.close()
+
+    #     except Exception as e:
+    #         error(f"⚠️ Database search error: {e}")
+    #         return []
+
+    #     info(f"📊 Database search found {len(results)} matching files")
+
+    #     if len(results) == 0:
+    #         info(
+    #             f"💡 No files found matching '{query}' in database. Try different search terms."
+    #         )
+
+    #     return results
 
     def ai_search(self, query: str) -> List[Dict[str, Any]]:
         """AI-powered search (placeholder for now)"""

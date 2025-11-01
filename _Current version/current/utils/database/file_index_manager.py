@@ -146,6 +146,12 @@ class FileIndexManager:
 
             conn.commit()
             conn.close()
+            info(f'🚀 Indexed Manager am done accessing db!')
+            info(f'🚀 Indexed Manager am done accessing db!')
+            info(f'🚀 Indexed Manager am done accessing db!')
+            info(f'🚀 Indexed Manager am done accessing db!')
+            info(f'🚀 Indexed Manager am done accessing db!')
+            info(f'🚀 Indexed Manager am done accessing db!')
 
         except Exception as e:
             error(f"❌ Error initializing database: {e}")

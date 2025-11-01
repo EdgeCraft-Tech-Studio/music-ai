@@ -58,7 +58,6 @@ DEFAULT_EXTENSIONS = [
 DEFAULT_SEARCH_FOLDERS = [
     # Empty by default - users must configure folders in Preferences
     "/home/elvis/Music",
-    r'C:\Users\Abush\Pictures\New folder'
 ]
 # /home/elvis/.config/PatchIO
 
@@ -299,6 +298,6 @@ ELASTICSEARCH_MAX_RESULTS = 1000
 
 # MeiliSearch Configuration
 
-MEILISEARCH_ACTIVE = True
+MEILISEARCH_ACTIVE = False
 MEILISEARCH_URL = "http://127.0.0.1:7700"
 MEILISEARCH_INDEX_NAME = "patchio_files"

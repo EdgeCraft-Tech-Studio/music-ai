@@ -525,7 +525,7 @@ class MaterialCheckBox(QCheckBox):
         """Handle mouse clicks to toggle checkbox"""
         if event.button() == Qt.LeftButton:
             self.setChecked(not self.isChecked())
-            self.clicked.emit(self.isChecked())
+            self.clicked.emit()  #self.clicked.emit(self.isChecked())
         super().mousePressEvent(event)
 
 
@@ -873,6 +873,7 @@ class MainController(QObject):
         if folders_to_add or folders_to_remove:
             # Restart file watcher with new folders
             info("🔄 Restarting file index manager with updated folders...")
+            info(f"checking if a data is exist {new_folders_set}")
             self.restart_file_watcher(new_folders_set)
         else:
             warning("✅ No folder changes detected")

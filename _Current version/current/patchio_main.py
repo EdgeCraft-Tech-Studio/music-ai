@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*- 
 """
 PatchIO - Modern Sound Library Manager
 Entry point for the application
@@ -33,7 +33,7 @@ def main():
         # Create and run the MVC application
         app = MVCPatchIOLoader()
         app.load_ui()
-        return app.run()
+        return app.run() 
     except Exception as e:
         error(f"❌ Failed to start PatchIO: {e}")
         import traceback
