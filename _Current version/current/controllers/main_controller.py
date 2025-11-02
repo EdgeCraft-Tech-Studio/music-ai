@@ -525,7 +525,7 @@ class MaterialCheckBox(QCheckBox):
         """Handle mouse clicks to toggle checkbox"""
         if event.button() == Qt.LeftButton:
             self.setChecked(not self.isChecked())
-            self.clicked.emit()  #self.clicked.emit(self.isChecked())
+            self.clicked.emit(self.isChecked())
         super().mousePressEvent(event)
 
 
@@ -868,16 +868,18 @@ class MainController(QObject):
             info(f"🗑️  Removing {len(folders_to_remove)} folder(s) from index:")
             for folder in folders_to_remove:
                 debug(f"    - {folder}")
+                
                 self.remove_folder_from_database(db_path, folder)
         
         if folders_to_add or folders_to_remove:
             # Restart file watcher with new folders
             info("🔄 Restarting file index manager with updated folders...")
-            info(f"checking if a data is exist {new_folders_set}")
+            info(f"********** checking if a data is exist {new_folders_set} **********")
             self.restart_file_watcher(new_folders_set)
         else:
             warning("✅ No folder changes detected")
-    
+
+
     def remove_folder_from_database(self, db_path, folder_path):
         """Remove all files from a specific folder from the database"""
         try:
@@ -885,7 +887,6 @@ class MainController(QObject):
             
             conn = sqlite3.connect(db_path, timeout=10.0)
             cursor = conn.cursor()
-            
             # Remove all files that start with this folder path
             cursor.execute("""
                 DELETE FROM files 
@@ -902,11 +903,13 @@ class MainController(QObject):
             error(f"❌ Error removing folder from database: {e}")
     
     def restart_file_watcher(self, new_folders):
-        """Restart file watcher with new folder configuration"""
-        # Stop existing file watcher if running
-        if hasattr(self, 'file_index_manager') and self.file_index_manager:
-            self.file_index_manager.stop_real_time_monitoring()
-            info("🛑 Stopped existing file watcher")
+        info("🛑 inside restart_file_watche main_controller lne 906")
+        # """Restart file watcher with new folder configuration"""
+        # # Stop existing file watcher if running
+        # if hasattr(self, 'file_index_manager') and self.file_index_manager:
+        #     self.file_index_manager.stop_real_time_monitoring()
+        #     info("🛑 Stopped existing file watcher")
+
         
         # Stop sync worker if running
         if hasattr(self, 'sync_worker') and self.sync_worker and self.sync_worker.isRunning():
@@ -915,12 +918,12 @@ class MainController(QObject):
             self.sync_worker.wait(2000)
             info("🛑 Stopped existing sync worker")
         
+        
         # Clear the sync worker reference so a new one can be created
         self.sync_worker = None
         
         # Re-initialize file watcher with new folders
         self._setup_file_watcher()
-        
         # Show appropriate message based on whether folders exist
         if new_folders and len(new_folders) > 0:
             info(f"✅ File watcher restarted with {len(new_folders)} folder(s)")
@@ -1569,7 +1572,7 @@ class MainController(QObject):
             # Get database path
             config_dir = appdirs.user_config_dir(APP_NAME, APP_AUTHOR)
             db_path = os.path.join(config_dir, "patchio_index.db")
-            
+            info("⚠️ inside file watcher")
             # Get indexed folders from settings
             indexed_folders = set(self.settings_model.get_setting("search_folders", []))
             
@@ -1610,7 +1613,7 @@ class MainController(QObject):
                 warning("⚠️ File index manager not started - no indexed folders configured")
                 
         except Exception as e:
-            error("❌ Failed to setup file index manager: {}".format(e))
+            error("❌ Failed to setup file index manager error: {}".format(e))
     
     def _on_sync_progress(self, message: str):
         """Handle sync progress updates"""

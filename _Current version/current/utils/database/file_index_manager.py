@@ -63,13 +63,33 @@ class FileIndexManager:
         info(
             f"🚀 Professional optimizations enabled: {len(self._compiled_extensions)} extensions, batch size {self.batch_size}"
         )
+    
+    def _apply_sqlite_tuning(self, cursor, mode: str = "safe"):
+        # Always-on
+        cursor.execute('PRAGMA journal_mode=WAL')
+        cursor.execute('PRAGMA temp_store=MEMORY')
+        cursor.execute('PRAGMA mmap_size=268435456')
+        cursor.execute('PRAGMA cache_size=-200000')   # ~200MB
+        # You likely don’t use FKs on the index DB
+        cursor.execute('PRAGMA foreign_keys=OFF')
+
+        if mode == "safe":
+            cursor.execute('PRAGMA synchronous=NORMAL')
+            # Avoid EXCLUSIVE so other connections (readers) can work
+            cursor.execute('PRAGMA locking_mode=NORMAL')
+        elif mode == "turbo":
+            cursor.execute('PRAGMA synchronous=OFF')
+            cursor.execute('PRAGMA locking_mode=EXCLUSIVE')
+            cursor.execute('PRAGMA cache_size=-500000')  # ~500MB
+        else:
+            raise ValueError("mode must be 'safe' or 'turbo'")
 
     def _initialize_database(self):
         """Initialize database with required tables and indexes"""
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-
+            self._apply_sqlite_tuning(cursor, mode="safe")
             # Create files table with comprehensive schema
             cursor.execute(
                 """
@@ -614,6 +634,7 @@ class FileIndexManager:
         info("🗑️ Clearing existing database for fresh sync...")
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
+        self._apply_sqlite_tuning(cursor, mode="safe")
         cursor.execute("DELETE FROM files")
         cursor.execute("DELETE FROM file_hashes")
         conn.commit()
@@ -747,7 +768,7 @@ class FileIndexManager:
 
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-
+        self._apply_sqlite_tuning(cursor, mode="safe")
         try:
             # 🚀 BATCH INSERT with INSERT OR IGNORE to handle duplicates
             insert_sql = """
@@ -834,7 +855,7 @@ class FileIndexManager:
         """🚀 PROFESSIONAL batch database operations with MeiliSearch sync"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-
+        self._apply_sqlite_tuning(cursor, mode="safe")
         add_paths = []
         update_paths = []
         remove_paths = []
@@ -1021,7 +1042,7 @@ class FileIndexManager:
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-
+            self._apply_sqlite_tuning(cursor, mode="safe")
             current_time = time.time()
             indexed_folders_json = str(list(self.indexed_folders))
 
@@ -1159,6 +1180,7 @@ class FileIndexManager:
 
     def stop_real_time_monitoring(self) -> None:
         """Stop real-time monitoring safely (idempotent)."""
+        info("🛑 inside stop_real_time_monitoring stop_real_time_monitoring line 1182")
         with getattr(self, "_monitor_lock", threading.Lock()):
             watcher = getattr(self, "file_watcher", None)
             if not watcher or not getattr(watcher, "is_running", False):
@@ -1183,6 +1205,7 @@ class FileIndexManager:
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
+            self._apply_sqlite_tuning(cursor, mode="safe")
             if event.event_type == "created":
                 self._handle_file_created(cursor, event.path)
                 self._sync_to_meilisearch([event.path], "upsert") 
@@ -1457,7 +1480,7 @@ class FileIndexManager:
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-
+            self._apply_sqlite_tuning(cursor, mode="safe")
             cursor.execute(
                 """
                 UPDATE files 
@@ -1677,4 +1700,4 @@ def test_file_index_manager():
 
 
 if __name__ == "__main__":
-    test_file_index_manager()  
+    test_file_index_manager()   
