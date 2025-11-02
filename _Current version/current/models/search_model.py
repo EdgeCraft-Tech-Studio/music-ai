@@ -35,7 +35,7 @@ try:
         info("✅ Successfully imported settings from settings.core_settings")
     except RuntimeError:
         # Logger not initialized yet, use print instead
-        print("✅ Successfully imported settings from settings.core_settings")
+        info("✅ Successfully imported settings from settings.core_settings")
 
 except ImportError as e:
     # Try to use logger, but fall back to print if not available
@@ -55,18 +55,18 @@ except ImportError as e:
         error("❌ Application cannot start without settings.core_settings")
         error("❌ Please ensure settings/core_settings.py exists and is accessible")
     except RuntimeError:
-        print("❌ CRITICAL ERROR: Cannot import settings.core_settings")
-        print("🔍 Error details: {}".format(e))
-        print("🔍 Current working directory: {}".format(os.getcwd()))
-        print("🔍 File location: {}".format(__file__))
-        print(
+        error("❌ CRITICAL ERROR: Cannot import settings.core_settings")
+        error("🔍 Error details: {}".format(e))
+        error("🔍 Current working directory: {}".format(os.getcwd()))
+        error("🔍 File location: {}".format(__file__))
+        error(
             "🔍 Expected settings file: {}".format(
                 os.path.join(parent_dir, "settings", "core_settings.py")
             )
         )
-        print("")
-        print("❌ Application cannot start without settings.core_settings")
-        print("❌ Please ensure settings/core_settings.py exists and is accessible")
+        error("")
+        critical("❌ Application cannot start without settings.core_settings")
+        critical("❌ Please ensure settings/core_settings.py exists and is accessible")
     raise ImportError("Failed to import settings.core_settings: {}".format(e))
 
 
@@ -90,10 +90,112 @@ class SearchModel:
         # Database path for index search - use app data folder
         self.db_path = self._get_database_path()
 
-        # ES client (lazy)
+        # ES client initialization
         self._es_client = None
         self._es_enabled = bool(ELASTICSEARCH_ENABLED)
         self._init_es_if_available()
+
+        # FTS5 initialization
+        self._fts5_available = False
+        self._init_fts5_if_available()
+
+        # Search engine priority: FTS5 -> ES -> Native SQLite
+        self.search_engine_priority = self._get_search_engine_priority()
+
+    def _get_search_engine_priority(self):
+        """Determine search engine priority based on configuration"""
+        priority = []
+
+        if getattr(self, "_fts5_available", False) and getattr(
+            __import__("settings.core_settings"), "FTS5_SQLITE_ENABLED", False
+        ):
+            priority.append("fts5")
+
+        if self._es_enabled:
+            priority.append("elasticsearch")
+
+        # Native SQLite is always available as fallback
+        priority.append("native_sqlite")
+
+        debug(f"🔍 Search engine priority: {priority}")
+        return priority
+
+    def _init_fts5_if_available(self):
+        """Initialize FTS5 virtual tables if available and enabled"""
+        try:
+            # Check if FTS5 is available in SQLite
+            conn = sqlite3.connect(":memory:")
+            cursor = conn.cursor()
+            cursor.execute("SELECT fts5(?);", ("test",))
+            conn.close()
+
+            # FTS5 is available
+            self._fts5_available = True
+            info("✅ FTS5 is available in SQLite")
+
+            # Create FTS5 virtual tables if they don't exist
+            self._create_fts5_tables()
+
+        except sqlite3.OperationalError:
+            warning(
+                "⚠️ FTS5 not available in SQLite - falling back to other search engines"
+            )
+            self._fts5_available = False
+        except Exception as e:
+            warning(f"⚠️ Error checking FTS5 availability: {e}")
+            self._fts5_available = False
+
+    def _create_fts5_tables(self):
+        """Create FTS5 virtual tables for full-text search"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+
+            # Check if FTS5 table already exists
+            cursor.execute(
+                """
+                SELECT name FROM sqlite_master 
+                WHERE type='table' AND name='files_fts'
+            """
+            )
+
+            if not cursor.fetchone():
+                info("🔧 Creating FTS5 virtual table...")
+
+                # Create FTS5 virtual table with the same columns as main table
+                cursor.execute(
+                    """
+                    CREATE VIRTUAL TABLE files_fts USING fts5(
+                        path,
+                        name,
+                        vendor,
+                        library,
+                        instrument,
+                        genre,
+                        tags,
+                        keywords,
+                        file_type,
+                        tokenize = 'porter unicode61'
+                    )
+                """
+                )
+
+                # Populate FTS5 table with existing data
+                cursor.execute(
+                    """
+                    INSERT INTO files_fts 
+                    SELECT path, name, vendor, library, instrument, genre, tags, keywords, file_type
+                    FROM files
+                """
+                )
+
+                info("✅ FTS5 virtual table created and populated")
+
+            conn.commit()
+            conn.close()
+
+        except Exception as e:
+            error(f"❌ Error creating FTS5 tables: {e}")
 
     def _init_es_if_available(self):
         if not self._es_enabled:
@@ -265,20 +367,159 @@ class SearchModel:
 
     def database_search(self, query: str) -> List[Dict[str, Any]]:
         """
-        The controller calls this. We transparently use ES if available,
-        otherwise fallback to SQLite query as before.
+        Enhanced database search with configurable engine priority:
+        FTS5 -> Elasticsearch -> Native SQLite
         """
-        if self._es_client:
+        # Try search engines in priority order
+        for engine in self.search_engine_priority:
             try:
-                return self.elasticsearch_search(query)
+                if engine == "fts5" and self._fts5_available:
+                    results = self.fts5_sqlite_search(query)
+                    if results:
+                        info(f"🔍 FTS5 search found {len(results)} results")
+                        return results
+
+                elif engine == "elasticsearch" and self._es_client:
+                    results = self.elasticsearch_search(query)
+                    if results:
+                        info(f"🔍 Elasticsearch found {len(results)} results")
+                        return results
+
+                elif engine == "native_sqlite":
+                    results = self.native_sqlite_search(query)
+                    if results:
+                        info(f"🔍 Native SQLite found {len(results)} results")
+                        return results
+
             except Exception as e:
-                warning(f"⚠️ Elasticsearch search failed, falling back to SQLite: {e}")
+                warning(f"⚠️ {engine} search failed: {e}")
+                continue
+
+        warning("⚠️ All search engines failed")
+        return []
+
+    # --------------------
+    # fts5_sqlite search
+    # --------------------
+    def fts5_sqlite_search(self, query: str) -> List[Dict[str, Any]]:
+        """Perform high-performance search using SQLite FTS5"""
+        info(f"🚀 FTS5 Search: {query}")
+
+        if not query or not query.strip():
+            warning("⚠️ Empty search query!")
+            return []
+
+        if not self._fts5_available:
+            warning("⚠️ FTS5 not available")
+            return []
+
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+
+            # Parse query for FTS5 syntax
+            fts5_query = self._build_fts5_query(query)
+
+            # build query
+            sql_query = """
+                SELECT 
+                    f.path, f.name, f.vendor, f.library, f.instrument, 
+                    f.genre, f.tags, f.keywords, f.file_type
+                FROM files_fts
+                JOIN files f ON files_fts.path = f.path
+                WHERE files_fts MATCH ?
+                ORDER BY f.name ASC
+                LIMIT ?
+            """
+
+            limit = getattr(
+                __import__("settings.core_settings"), "FTS5_MAX_RESULTS", 1000
+            )
+
+            debug(f"🔍 Executing FTS5 query: {fts5_query}")
+            cursor.execute(sql_query, (fts5_query, limit))
+            rows = cursor.fetchall()
+
+            results = []
+            for row in rows:
+                results.append(
+                    {
+                        "path": row[0],
+                        "name": row[1],
+                        "vendor": row[2] or "Unknown Vendor",
+                        "library": row[3] or "Unknown Library",
+                        "instrument": row[4] or "",
+                        "genre": row[5] or "",
+                        "tags": row[6] or "",
+                        "keywords": row[7] or "",
+                        "file_type": row[8] or "File",
+                        "type": "FTS5 Match",
+                        "is_audio": True,
+                    }
+                )
+
+            conn.close()
+            info(f"📊 FTS5 search found {len(results)} matching files")
+            return results
+
+        except Exception as e:
+            error(f"❌ FTS5 search error: {e}")
+            return []
+
+    def _build_fts5_query(self, query: str) -> str:
+        """Convert user query to FTS5 syntax with advanced features"""
+        # Parse the bubble query to understand structure
+        or_terms, and_terms, not_terms, or_quoted, and_quoted, not_quoted = (
+            self._parse_bubble_query(query.strip())
+        )
+
+        fts5_parts = []
+
+        # Handle OR terms (default)
+        if or_terms:
+            or_query = " OR ".join(
+                f'"{term}"' if quoted else term
+                for term, quoted in zip(or_terms, or_quoted)
+            )
+            fts5_parts.append(f"({or_query})")
+
+        # Handle AND terms (must appear)
+        if and_terms:
+            and_query = " ".join(
+                f'"{term}"' if quoted else f"+{term}"
+                for term, quoted in zip(and_terms, and_quoted)
+            )
+            fts5_parts.append(f"({and_query})")
+
+        # Handle NOT terms (exclude)
+        if not_terms:
+            not_query = " ".join(
+                f'"{term}"' if quoted else f"-{term}"
+                for term, quoted in zip(not_terms, not_quoted)
+            )
+            fts5_parts.append(f"({not_query})")
+
+        # Combine all parts
+        if fts5_parts:
+            final_query = " ".join(fts5_parts)
+        else:
+            # Fallback to simple query
+            final_query = query
+
+        debug(f"🔍 FTS5 query transformation: '{query}' -> '{final_query}'")
+        return final_query
+
+    def native_sqlite_search(self, query: str) -> List[Dict[str, Any]]:
+        """Native SQLite search (existing functionality, now as separate method)"""
+        # This is essentially the existing sqlite_database_search method
+        # renamed and refactored for clarity
+        info(f"🗄️ Native SQLite Search: {query}")
+        # ... existing sqlite_database_search implementation ...
         return self.sqlite_database_search(query)
 
     # --------------------
     # Elasticsearch search
     # --------------------
-
     def _build_es_bool_query(self, query_text: str) -> Dict[str, Any]:
         """
         Convert the bubble query into ES bool query format.

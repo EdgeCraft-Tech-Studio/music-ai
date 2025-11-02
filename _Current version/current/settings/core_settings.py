@@ -276,7 +276,6 @@ FILE_ICON_MAPPINGS = {
 # ============================================================================
 
 # Elasticsearch configuration
-ELASTICSEARCH_ENABLED = True
 ELASTICSEARCH_HOSTS = ["http://localhost:9200"]
 ELASTICSEARCH_USERNAME = None
 ELASTICSEARCH_PASSWORD = None
@@ -287,4 +286,29 @@ ELASTICSEARCH_BULK_SIZE = 2000
 ELASTICSEARCH_BULK_CONCURRENCY = 2
 ELASTICSEARCH_MAX_RESULTS = 1000
 
+# SEARCH ENGINE CONFIGURATION
+# Only one search engine should be enabled at a time
+FTS5_SQLITE_ENABLED = True
+ELASTICSEARCH_ENABLED = False
+NATIVE_SQLITE_ENABLED = False
+
+
+# FTS5 Configuration
+FTS5_TOKENIZER = "porter"
+FTS5_MAX_RESULTS = 1000
+FTS5_RANKING_FUNCTION = "bm25"
+
+# Ensure only one search engine is active
+_active_engines = [FTS5_SQLITE_ENABLED, ELASTICSEARCH_ENABLED, NATIVE_SQLITE_ENABLED]
+if sum(_active_engines) > 1:
+    raise ValueError("Only one search engine should be enabled at a time")
+
+
 # curl -X GET "http://localhost:9200/patchio_files/_search?pretty&size=10"
+
+# SELECT COUNT(*) FROM files_fts
+# WHERE files_fts MATCH '"Aster Awoke" OR "Beta Wolf"';
+
+# SELECT COUNT(*) FROM files
+# WHERE name LIKE '%Aster Awoke%'
+#    OR name LIKE '%Beta Wolf%';

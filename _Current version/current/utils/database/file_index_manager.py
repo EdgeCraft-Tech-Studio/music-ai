@@ -59,10 +59,72 @@ class FileIndexManager:
         # Initialize database
         self._initialize_database()
 
+        # FTS5 maintenance
+        self._ensure_fts5_tables()
+
         info(f"📁 File Index Manager initialized for {len(indexed_folders)} folders")
         info(
             f"🚀 Professional optimizations enabled: {len(self._compiled_extensions)} extensions, batch size {self.batch_size}"
         )
+
+    def _ensure_fts5_tables(self):
+        """Ensure FTS5 virtual tables exist and are maintained"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+
+            # Check if FTS5 extension is available
+            cursor.execute("PRAGMA compile_options;")
+            compile_options = [row[0] for row in cursor.fetchall()]
+
+            if "ENABLE_FTS5" not in compile_options:
+                warning("⚠️ FTS5 not compiled in SQLite - FTS5 search will be disabled")
+                conn.close()
+                return
+
+            # Create FTS5 table if it doesn't exist
+            cursor.execute(
+                """
+                SELECT name FROM sqlite_master 
+                WHERE type='table' AND name='files_fts'
+            """
+            )
+
+            if not cursor.fetchone():
+                info("🔧 Creating FTS5 virtual table for full-text search...")
+                cursor.execute(
+                    """
+                    CREATE VIRTUAL TABLE files_fts USING fts5(
+                        path UNINDEXED,
+                        name,
+                        vendor,
+                        library,
+                        instrument,
+                        genre,
+                        tags,
+                        keywords,
+                        file_type,
+                        tokenize = 'porter unicode61'
+                    )
+                """
+                )
+
+                # Populate initial data
+                cursor.execute(
+                    """
+                    INSERT INTO files_fts 
+                    SELECT path, name, vendor, library, instrument, genre, tags, keywords, file_type
+                    FROM files
+                """
+                )
+
+                info("✅ FTS5 virtual table created")
+
+            conn.commit()
+            conn.close()
+
+        except Exception as e:
+            warning(f"⚠️ FTS5 setup failed: {e}")
 
     def _initialize_database(self):
         """Initialize database with required tables and indexes"""
@@ -714,6 +776,7 @@ class FileIndexManager:
         )
 
     def _process_batch(self, batch_data: List[Tuple], inserted_paths: List[str]):
+        """Process batch with FTS5 maintenance"""
         if not batch_data:
             return
 
@@ -738,6 +801,9 @@ class FileIndexManager:
             )
             self.stats["files_added"] += added
 
+            # After main batch processing, update FTS5 table
+            self._update_fts5_for_batch(inserted_paths, cursor)
+
             conn.commit()
 
         except Exception as e:
@@ -753,6 +819,34 @@ class FileIndexManager:
                 self.es_sync.bulk_upsert_paths(inserted_paths)
         except Exception as e:
             warning(f"⚠️ ES bulk upsert (batch) failed: {e}")
+
+    def _update_fts5_for_batch(self, paths: List[str], cursor):
+        """Update FTS5 table for a batch of changed files"""
+        if not paths:
+            return
+
+        try:
+            # Delete existing FTS5 entries for these paths
+            placeholders = ",".join(["?"] * len(paths))
+            delete_sql = f"DELETE FROM files_fts WHERE path IN ({placeholders})"
+            cursor.execute(delete_sql, paths)
+
+            # Insert updated entries - USE SIMPLE INSERT, NOT REPLACE
+            insert_sql = """
+                INSERT INTO files_fts 
+                SELECT path, name, vendor, library, instrument, genre, tags, keywords, file_type
+                FROM files 
+                WHERE path IN ({})
+            """.format(
+                placeholders
+            )
+
+            cursor.execute(insert_sql, paths)
+
+            debug(f"🔄 Updated FTS5 for {len(paths)} files")
+
+        except Exception as e:
+            warning(f"⚠️ FTS5 batch update failed: {e}")
 
     def _simple_extract_vendor_library(self, file_path: str) -> Tuple[str, str]:
         """Simple fallback vendor/library extraction"""
@@ -1162,8 +1256,28 @@ class FileIndexManager:
         except Exception as e:
             warning(f"⚠️ Real-time ES sync failed: {e}")
 
+    def _update_fts5_for_file(self, cursor, file_path: str):
+        """Safely update FTS5 for a single file"""
+        try:
+            # First delete any existing entries for this path
+            cursor.execute("DELETE FROM files_fts WHERE path = ?", (file_path,))
+
+            # Then insert the current data (no REPLACE, just INSERT)
+            cursor.execute(
+                """
+                INSERT INTO files_fts 
+                SELECT path, name, vendor, library, instrument, genre, tags, keywords, file_type
+                FROM files 
+                WHERE path = ?
+            """,
+                (file_path,),
+            )
+
+        except Exception as e:
+            warning(f"⚠️ FTS5 update failed for {file_path}: {e}")
+
     def _handle_file_created(self, cursor, file_path: str):
-        """Handle file creation event with optimized processing"""
+        """Handle file creation with FTS5 update"""
         if not self._should_process_file(file_path):
             return
 
@@ -1202,19 +1316,28 @@ class FileIndexManager:
                 ),
             )
 
+            # Update FTS5 table - USE THE CORRECTED METHOD
+            self._update_fts5_for_file(cursor, file_path)
+
             info(f"➕ Added file: {file_name}")
 
         except Exception as e:
             error(f"❌ Error adding file {file_path}: {e}")
 
     def _handle_file_deleted(self, cursor, file_path: str):
-        """Handle file deletion event"""
+        """Handle file deletion with FTS5 update"""
         cursor.execute("DELETE FROM files WHERE path = ?", (file_path,))
         if cursor.rowcount > 0:
             info(f"➖ Removed file: {os.path.basename(file_path)}")
 
+        # Update FTS5 table
+        try:
+            cursor.execute("DELETE FROM files_fts WHERE path = ?", (file_path,))
+        except Exception as e:
+            warning(f"⚠️ FTS5 delete failed for {file_path}: {e}")
+
     def _handle_file_moved(self, cursor, old_path: str, new_path: str):
-        """Handle file move/rename event with optimized processing"""
+        """Handle file move/rename event with optimized processing and FTS5 update"""
         # Check if moved to Trash (macOS deletion)
         if ".Trashes" in new_path or "Trash" in new_path:
             cursor.execute("DELETE FROM files WHERE path = ?", (old_path,))
@@ -1274,6 +1397,13 @@ class FileIndexManager:
                     # File not in database, add it
                     self._handle_file_created(cursor, new_path)
 
+                # Update FTS5 table - DELETE OLD, INSERT NEW
+                try:
+                    cursor.execute("DELETE FROM files_fts WHERE path = ?", (old_path,))
+                    self._update_fts5_for_file(cursor, new_path)
+                except Exception as e:
+                    warning(f"⚠️ FTS5 move update failed: {e}")
+
             except Exception as e:
                 error(f"❌ Error moving file {old_path}: {e}")
         else:
@@ -1285,7 +1415,7 @@ class FileIndexManager:
                 )
 
     def _handle_file_modified(self, cursor, file_path: str):
-        """Handle file modification event with optimized processing"""
+        """Handle file modification event with optimized processing and FTS5 update"""
         if not self._should_process_file(file_path):
             return
 
@@ -1321,6 +1451,9 @@ class FileIndexManager:
 
             if cursor.rowcount > 0:
                 info(f"📝 Updated file: {os.path.basename(file_path)}")
+
+            # Update FTS5 table
+            self._update_fts5_for_file(cursor, file_path)
 
         except Exception as e:
             error(f"❌ Error updating file {file_path}: {e}")
