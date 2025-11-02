@@ -305,10 +305,3 @@ if sum(_active_engines) > 1:
 
 
 # curl -X GET "http://localhost:9200/patchio_files/_search?pretty&size=10"
-
-# SELECT COUNT(*) FROM files_fts
-# WHERE files_fts MATCH '"Aster Awoke" OR "Beta Wolf"';
-
-# SELECT COUNT(*) FROM files
-# WHERE name LIKE '%Aster Awoke%'
-#    OR name LIKE '%Beta Wolf%';
