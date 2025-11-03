@@ -640,7 +640,7 @@ class SearchController:
         """Perform database search with dynamic result streaming"""
         debug(f"🗄️ Dynamic Database Search: {query}")
 
-        # Check if search has been cancelled
+        # Check if search has been cancelled apply_filters_to_result
         if self.should_stop_search or search_id != self.current_search_id:
             debug(f"🛑 Search {search_id} cancelled before database search")
             return
