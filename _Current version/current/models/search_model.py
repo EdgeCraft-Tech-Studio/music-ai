@@ -119,7 +119,7 @@ class SearchModel:
             priority.append("fts5")
 
         if self.meili_Search_active:
-            priority.append("elasticsearch")
+            priority.append("meilisearch")
 
         if self._es_enabled:
             priority.append("elasticsearch")
