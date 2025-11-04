@@ -3,7 +3,7 @@
 """
 File Index Manager for PatchIO handle_file_event
 Comprehensive system for keeping file index in sync with filesystem
-Handles startup sync, real-time monitoring, and efficient change detection
+Handles startup sync, real-time monitoring, and efficient change detection 1270
 """
 
 import os
@@ -1268,19 +1268,52 @@ class FileIndexManager:
                 raise
 
     def stop_real_time_monitoring(self) -> None:
-        """Stop real-time monitoring safely (idempotent)."""
-        info("🛑 inside stop_real_time_monitoring stop_real_time_monitoring line 1182")
-        with getattr(self, "_monitor_lock", threading.Lock()):
-            watcher = getattr(self, "file_watcher", None)
-            if not watcher or not getattr(watcher, "is_running", False):
+        """Stop real-time monitoring safely with proper resource cleanup."""
+        info("🛑 Stopping real-time monitoring file index manager line 1183")
+        
+        # Ensure lock exists
+        if not hasattr(self, "_monitor_lock"):
+            self._monitor_lock = threading.Lock()
+        
+        with self._monitor_lock:
+            # Early return if already stopped
+            if not self.is_monitoring:
                 info("ℹ️ Real-time monitoring already stopped")
+                return
+            
+            watcher = getattr(self, "file_watcher", None)
+            if not watcher:
+                info("ℹ️ No file watcher instance found")
                 self.is_monitoring = False
                 return
+            
             try:
-                watcher.stop()
-                info("🛑 Real-time monitoring stopped")
+                # Stop the watcher
+                if getattr(watcher, "is_running", False):
+                    
+                    info("inside here 1")
+                    try:
+                        watcher.stop()
+                    except Exception as e:
+                        print(f"error: {e}")
+                    info("inside here 2")
+                    
+                    # Wait for completion if supported
+                    if hasattr(watcher, 'join'):
+                        watcher.join(timeout=10.0)
+                    
+                    info("✅ Real-time monitoring stopped successfully")
+                else:
+                    info("ℹ️ File watcher was not running")
+                    
+            except Exception as e:
+                info(f"⚠️ Error stopping file watcher: {e}")
             finally:
+                # Always clean up state
                 self.is_monitoring = False
+                # Consider cleaning up the watcher object
+                # self.file_watcher = None
+
 
     def _handle_real_time_event(self, event):
         """DB commit first, then ES and MeiliSearch real-time sync"""

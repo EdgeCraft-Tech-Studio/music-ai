@@ -503,24 +503,33 @@ class WindowsFileWatcher(FileWatcher):
                     time.sleep(0.2)
 
     def stop(self) -> None:
-        self.is_running = False
-        try:
-            for t in getattr(self, "threads", []):
-                t.join(timeout=1.5)
-        except Exception:
-            pass
-        try:
-            import win32file
+        import win32file
+        import win32api
+        import pywintypes
 
-            for hDir, _, _ in self.handles:
-                try:
-                    win32file.CloseHandle(hDir)
-                except Exception:
-                    pass
-            self.handles.clear()
-        except Exception:
-            pass
-        info("🛑 Windows watcher stopped")
+        """Stop Windows file monitoring safely."""
+        if not self.is_running:
+            return
+
+        for i, (handle, _, _) in enumerate(self.handles):
+            try:
+                # Cancel pending I/O
+                win32file.CancelIoEx(handle, None)
+            except pywintypes.error as e:
+                info(f"⚠️ CancelIoEx failed for handle {i}: {e}")
+
+            try:
+                # Close the handle
+                win32file.CloseHandle(handle)
+            except pywintypes.error as e:
+                info(f"⚠️ CloseHandle failed for handle {i}: {e}")
+            finally:
+                # Remove reference
+                self.handles[i] = (None, None, None)
+
+        self.handles.clear()
+        self.is_running = False
+        info("🛑 Windows file watcher stopped")
 
     def reconcile(self, paths: Set[str], callback) -> Dict:
         """Reconcile missed changes using USN Journal"""

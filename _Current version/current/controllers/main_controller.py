@@ -906,9 +906,9 @@ class MainController(QObject):
         info("🛑 inside restart_file_watche main_controller lne 906")
         # """Restart file watcher with new folder configuration"""
         # # Stop existing file watcher if running
-        # if hasattr(self, 'file_index_manager') and self.file_index_manager:
-        #     self.file_index_manager.stop_real_time_monitoring()
-        #     info("🛑 Stopped existing file watcher")
+        if hasattr(self, 'file_index_manager') and self.file_index_manager:
+            self.file_index_manager.stop_real_time_monitoring()
+            info("🛑 Stopped existing file watcher")
 
         
         # Stop sync worker if running

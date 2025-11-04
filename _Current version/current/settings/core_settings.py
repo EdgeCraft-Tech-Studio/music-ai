@@ -58,6 +58,8 @@ DEFAULT_EXTENSIONS = [
 DEFAULT_SEARCH_FOLDERS = [
     # Empty by default - users must configure folders in Preferences
     "/home/elvis/Music",
+    r'C:\Users\yeabs\Downloads\mezm',
+    r'D:\dfdfdf'
 ]
 # /home/elvis/.config/PatchIO
 
@@ -294,7 +296,7 @@ MEILISEARCH_INDEX_NAME = "patchio_files"
 # SEARCH ENGINE CONFIGURATION
 # Only one search engine should be enabled at a time
 ELASTICSEARCH_ENABLED = False
-FTS5_SQLITE_ENABLED = True
+FTS5_SQLITE_ENABLED = False
 MEILISEARCH_ACTIVE = False
 NATIVE_SQLITE_ENABLED = False
 
